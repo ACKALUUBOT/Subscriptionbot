@@ -32,6 +32,17 @@ db = client['sub_management']
 channels_col = db['channels']
 users_col = db['users']
 
+# --- ETHIOPIAN DATE HELPER ---
+def get_ethiopian_date(days_added):
+    from datetime import datetime, timedelta
+    future_date = datetime.now() + timedelta(days=days_added)
+    # የኢትዮጵያ ቀን አቆጣጠር (በግምት 7 አመት ከ 8 ወር ልዩነት)
+    if future_date.month <= 8 or (future_date.month == 9 and future_date.day <= 10):
+        eth_year = future_date.year - 8
+    else:
+        eth_year = future_date.year - 7
+    return f"{future_date.day}/{future_date.month}/{eth_year} (E.C)"
+
 # --- ADMIN LOGIC ---
 
 @bot.message_handler(commands=['start'])
@@ -184,6 +195,56 @@ def manage_ch(call):
     
     bot.edit_message_text(f"Settings for: *{ch_data['name']}*\n\nYour Link: `{link}`\n\nTo edit prices, use /add and forward a message from this channel again.", 
                           call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+
+# --- አድሚኑ በራሱ ቀን እንዲጨምር የሚያደርግ አዲስ ክፍል ---
+@bot.message_handler(commands=['vip'], func=lambda m: m.from_user.id == ADMIN_ID)
+def admin_add_vip_manual(message):
+    msg = bot.send_message(ADMIN_ID, "👤 VIP የሚሆነውን ሰው መልዕክት **Forward** ያድርጉ ወይም **ID** ይላኩ።")
+    bot.register_next_step_handler(msg, process_manual_id)
+
+def process_manual_id(message):
+    target_id = None
+    if message.forward_from:
+        target_id = message.forward_from.id
+    elif message.text.isdigit():
+        target_id = int(message.text)
+    
+    if target_id:
+        msg = bot.send_message(ADMIN_ID, f"🔢 ተጠቃሚ `{target_id}` ተገኝቷል።\nለስንት ቀን አባል እንዲሆን ይፈልጋሉ? (ቁጥር ብቻ ይላኩ - ለምሳሌ፦ 1, 7, 30)")
+        bot.register_next_step_handler(msg, finalize_manual_vip, target_id)
+    else:
+        bot.send_message(ADMIN_ID, "❌ ስህተት፡ መልዕክት Forward አላደረጉም ወይም ትክክለኛ ID አልላኩም። /vip ብለው እንደገና ይሞክሩ።")
+
+def finalize_manual_vip(message, target_id):
+    if not message.text.isdigit():
+        bot.send_message(ADMIN_ID, "❌ ስህተት፡ እባክዎ ቁጥር ብቻ ያስገቡ። /vip ብለው እንደገና ይጀምሩ።")
+        return
+
+    days = int(message.text)
+    expiry_datetime = datetime.now() + timedelta(days=days)
+    eth_date = get_ethiopian_date(days) # ይህ ቀደም ብለህ ያስገባኸውን function ይጠቀማል
+
+    ch_data = channels_col.find_one({"admin_id": ADMIN_ID})
+    if not ch_data:
+        bot.send_message(ADMIN_ID, "⚠️ መጀመሪያ /add ብለው ቻናል መመዝገብ አለብዎት!")
+        return
+
+    users_col.update_one(
+        {"user_id": target_id, "channel_id": ch_data['channel_id']},
+        {"$set": {"expiry": expiry_datetime.timestamp()}},
+        upsert=True
+    )
+
+    bot.send_message(ADMIN_ID, f"✅ ተሳክቷል!\n👤 ID: `{target_id}`\n📅 ቆይታ: {days} ቀን\n🔚 የሚያበቃው (በኢትዮጵያ): {eth_date}")
+
+    try:
+        link = bot.create_chat_invite_link(ch_data['channel_id'], member_limit=1)
+        bot.send_message(target_id, 
+            f"እንኳን ደስ አለዎት! 🎉\nየቪአይፒ አባልነትዎ ለ {days} ቀናት ጸድቋል።\n\n"
+            f"📅 የሚያበቃው (በኢትዮጵያ)፦ {eth_date}\n"
+            f"🔗 መግቢያ ሊንክ፦ {link.invite_link}")
+    except:
+        bot.send_message(ADMIN_ID, "⚠️ ለተጠቃሚው መልዕክት መላክ አልተቻለም (ቦቱን ስላልጀመረው ሊሆን ይችላል)።")
 
 # Automate Kicking
 def kick_expired_users():
