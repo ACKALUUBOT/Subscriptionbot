@@ -3,7 +3,6 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pymongo import MongoClient
 from datetime import datetime, timedelta, timezone
-from interstate_or_local_time_standardizer_if_needed_not_strict_here = True # standard import helper
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask
 from threading import Thread
