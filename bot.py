@@ -264,10 +264,10 @@ if __name__ == '__main__':
     scheduler.add_job(kick_expired_users, 'interval', minutes=1)
     scheduler.start()
     
-    # PEHLE SE ACTIVE WEBHOOK YA SESSIONS KO CLEAN KARNE KE LIYE
+    # Active webhooks aur pending sessions ko clear karne ke liye
     print("Deleting webhooks and clearing old sessions...")
     bot.delete_webhook(drop_pending_updates=True) 
     
     print("Bot is running...")
-    # non_stop=True aur interval=2 lagane se conflict hone par bot crash nahi hota balki retry karta hai
-    bot.infinity_polling(timeout=20, long_polling_timeout=10, non_stop=True)
+    # non_stop=True yahan se remove kar diya gaya hai, ab clash nahi hoga
+    bot.infinity_polling(timeout=20, long_polling_timeout=10)
