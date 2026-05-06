@@ -29,16 +29,6 @@ channels_col = db['channels']
 users_col = db['users']
 transactions_col = db['transactions']
 
-# --- RAZORPAY SMART INITIALIZATION ---
-rz_client = None
-if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
-    try:
-        rz_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
-        print("✅ Razorpay Client successfully initialized!")
-    except Exception as e:
-        print(f"⚠️ Razorpay Initialization Error: {e}")
-else:
-    print("ℹ️ Razorpay keys not found/incomplete. Running in Manual UPI Only Mode.")
 
 # --- RENDER KEEP-ALIVE & RAZORPAY WEBHOOK ---
 app = Flask('')
