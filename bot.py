@@ -42,7 +42,6 @@ else:
 
 # --- HELPER FUNCTION: NO-FLAG TIME FORMATTING ---
 def format_clean_duration(minutes):
-    """Converts raw minutes into clean uppercase text. No small-caps indicator flags."""
     mins = int(minutes)
     if mins < 60:
         return f"{mins} MIN"
@@ -60,7 +59,6 @@ app = Flask('')
 def home(): 
     return "Bot is running and healthy!"
 
-# Razorpay Automatic Webhook
 @app.route('/razorpay_webhook', methods=['POST'])
 def razorpay_webhook():
     if not rz_client or not RAZORPAY_WEBHOOK_SECRET:
@@ -239,7 +237,6 @@ def user_pays(call):
     
     payment_page_url = None
 
-    # Razorpay activation check
     if rz_client:
         try:
             rz_order = rz_client.order.create({
@@ -262,7 +259,7 @@ def user_pays(call):
 
             payment_page_url = f"https://api.razorpay.com/v1/checkout/hosted?key_id={RAZORPAY_KEY_ID}&order_id={order_id}"
         except Exception as e:
-            print(f"Razorpay Order Generation failed, falling back to manual: {e}")
+            print(f"Razorpay Order Generation failed: {e}")
 
     markup = InlineKeyboardMarkup()
     
@@ -315,38 +312,74 @@ def manual_checkout(call):
                 f"<b>PLAN:</b> {readable_plan}\n"
                 f"<b>PRICE:</b> ₹{price}\n"
                 f"<b>UPI ID:</b> <code>{UPI_ID}</code>\n\n"
-                f"Please scan this QR code, complete your transaction, and then click **'I HAVE PAID'** for manual verification.", 
+                f"Please scan this QR code, complete your transaction, and then click **'I HAVE PAID (VERIFY)'** to send your proof.", 
         reply_markup=markup, 
         parse_mode="HTML"
     )
 
+# --- NEW: SCREENSHOT SOLICITATION ---
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith('paid_'))
-def admin_notify(call):
+def ask_for_screenshot(call):
     bot.answer_callback_query(call.id)
     _, ch_id, mins = call.data.split('_')
-    user = call.from_user
-    ch_data = channels_col.find_one({"channel_id": int(ch_id)})
-    price = ch_data['plans'][mins]
     
+    # Send request for screenshot
+    msg = bot.send_message(
+        call.message.chat.id, 
+        "📷 <b>SUBMIT SCREENSHOT PROOF</b>\n\n"
+        "Please **send/upload the screenshot receipt** of your payment here to complete verification.\n\n"
+        "<i>Make sure the transaction ID/UTR is visible on the screenshot.</i>", 
+        parse_mode="HTML"
+    )
+    # Register next step handler to receive the image
+    bot.register_next_step_handler(msg, receive_screenshot, int(ch_id), int(mins))
+
+def receive_screenshot(message, ch_id, mins):
+    # Check if user sent a photo
+    if not message.photo:
+        msg = bot.send_message(
+            message.chat.id, 
+            "❌ <b>Error:</b> You didn't send a photo. Please click 'I HAVE PAID' and upload a valid receipt image."
+        )
+        return
+
+    user = message.from_user
+    ch_data = channels_col.find_one({"channel_id": ch_id})
+    price = ch_data['plans'][str(mins)]
+    readable_plan = format_clean_duration(mins)
+
+    # Admin Control Buttons
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("✅ APPROVE", callback_data=f"app_{user.id}_{ch_id}_{mins}"))
     markup.add(InlineKeyboardButton("❌ REJECT", callback_data=f"rej_{user.id}"))
-    
-    readable_plan = format_clean_duration(mins)
 
-    bot.send_message(
-        ADMIN_ID, 
-        f"⚠️ <b>MANUAL PAYMENT VERIFICATION REQUIRED!</b>\n\n"
-        f"<b>USER:</b> {user.first_name}\n"
-        f"<b>CHANNEL:</b> {ch_data['name']}\n"
-        f"<b>PLAN:</b> {readable_plan}\n"
-        f"<b>PRICE:</b> ₹{price}", 
-        reply_markup=markup, 
+    # Get the highest resolution screenshot photo ID
+    file_id = message.photo[-1].file_id
+
+    # Forward Screenshot and details directly to Admin
+    bot.send_photo(
+        ADMIN_ID,
+        file_id,
+        caption=f"⚠️ <b>MANUAL PAYMENT VERIFICATION REQUIRED!</b>\n\n"
+                f"<b>USER:</b> {user.first_name} (@{user.username if user.username else 'No_Username'})\n"
+                f"<b>CHANNEL:</b> {ch_data['name']}\n"
+                f"<b>PLAN:</b> {readable_plan}\n"
+                f"<b>PRICE:</b> ₹{price}\n\n"
+                f"<i>Please verify the attached receipt screenshot and take action below:</i>",
+        reply_markup=markup,
         parse_mode="HTML"
     )
-    
+
+    # Let user know we are verifying
     u_markup = InlineKeyboardMarkup().add(InlineKeyboardButton("📞 CONTACT ADMIN", url=f"https://t.me/{CONTACT_USERNAME}"))
-    bot.send_message(call.message.chat.id, "✅ Your manual payment request has been sent to the admin. Please wait for confirmation.", reply_markup=u_markup)
+    bot.send_message(
+        message.chat.id, 
+        "✅ <b>Screenshot Receipt Received!</b>\n\n"
+        "Your payment proof is successfully sent to the Admin. Please wait while we verify your transaction.", 
+        reply_markup=u_markup,
+        parse_mode="HTML"
+    )
 
 # --- APPROVAL & EXPIRY (Manual) ---
 
@@ -374,7 +407,7 @@ def approve_now(call):
             f"⚠️ <b>NOTE:</b> ACCESS LINK WILL EXPIRE IN {readable_plan}.", 
             parse_mode="HTML"
         )
-        bot.edit_message_text(f"✅ Approved user {u_id} for {readable_plan}.", call.message.chat.id, call.message.message_id)
+        bot.edit_message_caption(f"✅ Approved user {u_id} for {readable_plan}.", call.message.chat.id, call.message.message_id)
         
     except Exception as e:
         bot.send_message(ADMIN_ID, f"❌ Error while approving: {e}")
@@ -385,7 +418,7 @@ def reject_now(call):
     u_id = int(call.data.split('_')[1])
     try:
         bot.send_message(u_id, "❌ <b>PAYMENT REJECTED!</b>\n\nYour manual payment verification failed. Please contact the admin.", parse_mode="HTML")
-        bot.edit_message_text(f"❌ Rejected user {u_id} request.", call.message.chat.id, call.message.message_id)
+        bot.edit_message_caption(f"❌ Rejected user {u_id} request.", call.message.chat.id, call.message.message_id)
     except Exception as e:
         bot.send_message(ADMIN_ID, f"❌ Error while rejecting: {e}")
 
@@ -431,7 +464,6 @@ if __name__ == '__main__':
     scheduler.add_job(kick_expired_users, 'interval', minutes=1)
     scheduler.start()
     
-    # Forceful Webhook deletion on Telegram endpoint before starting long polling
     print("Clearing stuck telegram hook sessions...")
     try:
         bot.remove_webhook()
