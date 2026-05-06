@@ -7,7 +7,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, request, jsonify
 from threading import Thread
 import razorpay
-import uuid
 
 # --- CONFIGURATION (Environment Variables) ---
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -320,14 +319,14 @@ def manual_checkout(call):
         parse_mode="HTML"
     )
 
-# --- SCREENSHOT SOLICITATION WITH CANCEL BUTTON ---
+# --- SCREENSHOT SOLICITATION ---
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('paid_'))
 def ask_for_screenshot(call):
     bot.answer_callback_query(call.id)
     _, ch_id, mins = call.data.split('_')
     
-    # Inline keyboard with Cancel Option
+    # User inline keyboard for direct Cancel action
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("❌ CANCEL", callback_data=f"cancel_upload_{ch_id}"))
 
@@ -336,7 +335,7 @@ def ask_for_screenshot(call):
         "📷 <b>SUBMIT SCREENSHOT PROOF</b>\n\n"
         "Please **send/upload the screenshot receipt** of your payment here to complete verification.\n\n"
         "<i>Make sure the transaction ID/UTR is visible on the screenshot.</i>\n\n"
-        "👉 <i>If you want to cancel, please click the Cancel button below.</i>", 
+        "👉 <i>If you want to cancel, please click the Cancel button below or type 'cancel'.</i>", 
         reply_markup=markup,
         parse_mode="HTML"
     )
@@ -350,7 +349,7 @@ def cancel_upload_receipt(call):
     bot.answer_callback_query(call.id)
     ch_id = int(call.data.split('_')[2])
     
-    # Clear current step registration so user is free from input loop
+    # Clear active step listeners immediately
     bot.clear_step_handlers_by_chat_id(chat_id=call.message.chat.id)
     
     bot.send_message(
@@ -358,11 +357,13 @@ def cancel_upload_receipt(call):
         "❌ <b>Process Cancelled.</b>\nYour payment submission request has been discarded. Going back to plans menu...",
         parse_mode="HTML"
     )
-    # Redirect user back to the primary plans list
+    # Return user back to plans list
     show_plans_menu(call.message.chat.id, ch_id)
 
+# --- RESOLVED STEP HANDLER & CANCEL BYPASS ---
+
 def receive_screenshot(message, ch_id, mins):
-    # If user manually types /cancel instead of clicking button
+    # Bypass 1: If user manually typing 'cancel' or '/cancel'
     if message.text and message.text.lower() in ['/cancel', 'cancel']:
         bot.clear_step_handlers_by_chat_id(chat_id=message.chat.id)
         bot.send_message(message.chat.id, "❌ <b>Process Cancelled.</b> Going back to plans menu...", parse_mode="HTML")
@@ -381,7 +382,7 @@ def receive_screenshot(message, ch_id, mins):
             reply_markup=markup,
             parse_mode="HTML"
         )
-        # Register again for next try
+        # Re-register so next message triggers this same receiver
         bot.register_next_step_handler(msg, receive_screenshot, ch_id, mins)
         return
 
