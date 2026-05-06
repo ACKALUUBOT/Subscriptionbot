@@ -144,21 +144,8 @@ def start_handler(message):
     if len(text) > 1:
         try:
             ch_id = int(text[1])
-            ch_data = channels_col.find_one({"channel_id": ch_id})
-            if ch_data:
-                markup = InlineKeyboardMarkup()
-                for p_time, p_price in ch_data['plans'].items():
-                    label = format_clean_duration(p_time)
-                    markup.add(InlineKeyboardButton(f"💳 {label} - ₹{p_price}", callback_data=f"select_{ch_id}_{p_time}"))
-                
-                markup.add(InlineKeyboardButton("📞 CONTACT ADMIN", url=f"https://t.me/{CONTACT_USERNAME}"))
-                bot.send_message(
-                    message.chat.id, 
-                    f"WELCOME!\n\nYOU ARE JOINING: <b>{ch_data['name']}</b>.\n\nPLEASE SELECT A SUBSCRIPTION PLAN BELOW:", 
-                    reply_markup=markup, 
-                    parse_mode="HTML"
-                )
-                return
+            show_plans_menu(message.chat.id, ch_id)
+            return
         except Exception as e: 
             print(f"Error in deep link: {e}")
 
@@ -166,6 +153,22 @@ def start_handler(message):
         bot.send_message(message.chat.id, "✅ <b>ADMIN PANEL ACTIVE!</b>\n\n/add - ADD/EDIT CHANNEL & PRICES\n/channels - MANAGE EXISTING CHANNELS", parse_mode="HTML")
     else:
         bot.send_message(message.chat.id, "WELCOME! TO JOIN A CHANNEL, PLEASE USE THE SPECIFIC LINK PROVIDED BY THE ADMINISTRATOR.")
+
+def show_plans_menu(chat_id, ch_id):
+    ch_data = channels_col.find_one({"channel_id": ch_id})
+    if ch_data:
+        markup = InlineKeyboardMarkup()
+        for p_time, p_price in ch_data['plans'].items():
+            label = format_clean_duration(p_time)
+            markup.add(InlineKeyboardButton(f"💳 {label} - ₹{p_price}", callback_data=f"select_{ch_id}_{p_time}"))
+        
+        markup.add(InlineKeyboardButton("📞 CONTACT ADMIN", url=f"https://t.me/{CONTACT_USERNAME}"))
+        bot.send_message(
+            chat_id, 
+            f"WELCOME!\n\nYOU ARE JOINING: <b>{ch_data['name']}</b>.\n\nPLEASE SELECT A SUBSCRIPTION PLAN BELOW:", 
+            reply_markup=markup, 
+            parse_mode="HTML"
+        )
 
 @bot.message_handler(commands=['channels'], func=lambda m: m.from_user.id == ADMIN_ID)
 def list_channels(message):
@@ -317,31 +320,69 @@ def manual_checkout(call):
         parse_mode="HTML"
     )
 
-# --- NEW: SCREENSHOT SOLICITATION ---
+# --- SCREENSHOT SOLICITATION WITH CANCEL BUTTON ---
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('paid_'))
 def ask_for_screenshot(call):
     bot.answer_callback_query(call.id)
     _, ch_id, mins = call.data.split('_')
     
-    # Send request for screenshot
+    # Inline keyboard with Cancel Option
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("❌ CANCEL", callback_data=f"cancel_upload_{ch_id}"))
+
     msg = bot.send_message(
         call.message.chat.id, 
         "📷 <b>SUBMIT SCREENSHOT PROOF</b>\n\n"
         "Please **send/upload the screenshot receipt** of your payment here to complete verification.\n\n"
-        "<i>Make sure the transaction ID/UTR is visible on the screenshot.</i>", 
+        "<i>Make sure the transaction ID/UTR is visible on the screenshot.</i>\n\n"
+        "👉 <i>If you want to cancel, please click the Cancel button below.</i>", 
+        reply_markup=markup,
         parse_mode="HTML"
     )
-    # Register next step handler to receive the image
+    # Register next step handler to receive image
     bot.register_next_step_handler(msg, receive_screenshot, int(ch_id), int(mins))
 
+# --- CANCEL CALLBACK HANDLER ---
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_upload_'))
+def cancel_upload_receipt(call):
+    bot.answer_callback_query(call.id)
+    ch_id = int(call.data.split('_')[2])
+    
+    # Clear current step registration so user is free from input loop
+    bot.clear_step_handlers_by_chat_id(chat_id=call.message.chat.id)
+    
+    bot.send_message(
+        call.message.chat.id, 
+        "❌ <b>Process Cancelled.</b>\nYour payment submission request has been discarded. Going back to plans menu...",
+        parse_mode="HTML"
+    )
+    # Redirect user back to the primary plans list
+    show_plans_menu(call.message.chat.id, ch_id)
+
 def receive_screenshot(message, ch_id, mins):
+    # If user manually types /cancel instead of clicking button
+    if message.text and message.text.lower() in ['/cancel', 'cancel']:
+        bot.clear_step_handlers_by_chat_id(chat_id=message.chat.id)
+        bot.send_message(message.chat.id, "❌ <b>Process Cancelled.</b> Going back to plans menu...", parse_mode="HTML")
+        show_plans_menu(message.chat.id, ch_id)
+        return
+
     # Check if user sent a photo
     if not message.photo:
+        # Create a retry screen with Cancel option
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("❌ CANCEL", callback_data=f"cancel_upload_{ch_id}"))
+        
         msg = bot.send_message(
             message.chat.id, 
-            "❌ <b>Error:</b> You didn't send a photo. Please click 'I HAVE PAID' and upload a valid receipt image."
+            "❌ <b>Error:</b> You didn't send a photo. Please send a valid receipt image or click **CANCEL** below.",
+            reply_markup=markup,
+            parse_mode="HTML"
         )
+        # Register again for next try
+        bot.register_next_step_handler(msg, receive_screenshot, ch_id, mins)
         return
 
     user = message.from_user
@@ -354,10 +395,9 @@ def receive_screenshot(message, ch_id, mins):
     markup.add(InlineKeyboardButton("✅ APPROVE", callback_data=f"app_{user.id}_{ch_id}_{mins}"))
     markup.add(InlineKeyboardButton("❌ REJECT", callback_data=f"rej_{user.id}"))
 
-    # Get the highest resolution screenshot photo ID
     file_id = message.photo[-1].file_id
 
-    # Forward Screenshot and details directly to Admin
+    # Send receipt details to admin
     bot.send_photo(
         ADMIN_ID,
         file_id,
@@ -371,7 +411,6 @@ def receive_screenshot(message, ch_id, mins):
         parse_mode="HTML"
     )
 
-    # Let user know we are verifying
     u_markup = InlineKeyboardMarkup().add(InlineKeyboardButton("📞 CONTACT ADMIN", url=f"https://t.me/{CONTACT_USERNAME}"))
     bot.send_message(
         message.chat.id, 
