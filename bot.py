@@ -40,18 +40,18 @@ if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
 else:
     print("ℹ️ Razorpay keys not found/incomplete. Running in Manual UPI Only Mode.")
 
-# --- HELPER FUNCTION: SMALL CAPS TIME FORMATTING ---
-def format_small_caps_duration(minutes):
-    """Converts raw minutes into beautiful, consistent Small Caps durations."""
+# --- HELPER FUNCTION: NO-FLAG TIME FORMATTING ---
+def format_clean_duration(minutes):
+    """Converts raw minutes into clean uppercase text. No small-caps indicator flags."""
     mins = int(minutes)
     if mins < 60:
-        return f"{mins} ᴍɪɴ"
+        return f"{mins} MIN"
     elif mins >= 60 and mins < 1440:
         hours = mins // 60
-        return f"{hours} ʜᴏᴜʀs" if hours > 1 else f"{hours} ʜᴏᴜʀ"
+        return f"{hours} HOUR" if hours == 1 else f"{hours} HOURS"
     else:
         days = mins // 1440
-        return f"{days} ᴅᴀʏs" if days > 1 else f"{days} ᴅᴀʏ"
+        return f"{days} DAY" if days == 1 else f"{days} DAYS"
 
 # --- RENDER KEEP-ALIVE & RAZORPAY WEBHOOK ---
 app = Flask('')
@@ -106,23 +106,23 @@ def razorpay_webhook():
                     upsert=True
                 )
 
-                readable_plan = format_small_caps_duration(mins)
+                readable_plan = format_clean_duration(mins)
 
                 bot.send_message(
                     u_id, 
-                    f"🥳 <b>ᴘᴀʏᴍᴇɴᴛ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ ᴠᴇʀɪғɪᴇᴅ!</b>\n\n"
-                    f"sᴜʙsᴄʀɪᴘᴛɪᴏɴ ᴀᴄᴛɪᴠᴇ: {readable_plan}\n\n"
-                    f"👇 ᴊᴏɪɴ ᴜsɪɴɢ ᴛʜᴇ ʟɪɴᴋ ʙᴇʟᴏᴡ:\n{link.invite_link}\n\n"
-                    f"⚠️ <b>ɴᴏᴛᴇ:</b> ᴀᴄᴄᴇss ʟɪɴᴋ ᴡɪʟʟ ᴇxᴘɪʀᴇ ɪɴ {readable_plan}.", 
+                    f"🥳 <b>PAYMENT AUTOMATICALLY VERIFIED!</b>\n\n"
+                    f"SUBSCRIPTION ACTIVE: {readable_plan}\n\n"
+                    f"👇 JOIN USING THE LINK BELOW:\n{link.invite_link}\n\n"
+                    f"⚠️ <b>NOTE:</b> ACCESS LINK WILL EXPIRE IN {readable_plan}.", 
                     parse_mode="HTML"
                 )
 
                 bot.send_message(
                     ADMIN_ID, 
-                    f"✅ <b>ʀᴀᴢᴏʀᴘᴀʏ ᴀᴜᴛᴏ-ᴀᴘᴘʀᴏᴠᴇᴅ!</b>\n\n"
-                    f"ᴜsᴇʀ: {u_id}\n"
-                    f"ᴀᴍᴏᴜɴᴛ: ₹{tx['amount']}\n"
-                    f"ᴘʟᴀɴ: {readable_plan}"
+                    f"✅ <b>RAZORPAY AUTO-APPROVED!</b>\n\n"
+                    f"USER: {u_id}\n"
+                    f"AMOUNT: ₹{tx['amount']}\n"
+                    f"PLAN: {readable_plan}"
                 )
             except Exception as e:
                 print(f"Error sending auto-link: {e}")
@@ -150,13 +150,13 @@ def start_handler(message):
             if ch_data:
                 markup = InlineKeyboardMarkup()
                 for p_time, p_price in ch_data['plans'].items():
-                    label = format_small_caps_duration(p_time)
+                    label = format_clean_duration(p_time)
                     markup.add(InlineKeyboardButton(f"💳 {label} - ₹{p_price}", callback_data=f"select_{ch_id}_{p_time}"))
                 
-                markup.add(InlineKeyboardButton("📞 ᴄᴏɴᴛᴀᴄᴛ ᴀᴅᴍɪɴ", url=f"https://t.me/{CONTACT_USERNAME}"))
+                markup.add(InlineKeyboardButton("📞 CONTACT ADMIN", url=f"https://t.me/{CONTACT_USERNAME}"))
                 bot.send_message(
                     message.chat.id, 
-                    f"ᴡᴇʟᴄᴏᴍᴇ!\n\nʏᴏᴜ ᴀʀᴇ ᴊᴏɪɴɪɴɢ: <b>{ch_data['name']}</b>.\n\nᴘʟᴇᴀsᴇ sᴇʟᴇᴄᴛ ᴀ sᴜʙsᴄʀɪᴘᴛɪᴏɴ ᴘʟᴀɴ ʙᴇʟᴏᴡ:", 
+                    f"WELCOME!\n\nYOU ARE JOINING: <b>{ch_data['name']}</b>.\n\nPLEASE SELECT A SUBSCRIPTION PLAN BELOW:", 
                     reply_markup=markup, 
                     parse_mode="HTML"
                 )
@@ -165,9 +165,9 @@ def start_handler(message):
             print(f"Error in deep link: {e}")
 
     if user_id == ADMIN_ID:
-        bot.send_message(message.chat.id, "✅ <b>ᴀᴅᴍɪɴ ᴘᴀɴᴇʟ ᴀᴄᴛɪᴠᴇ!</b>\n\n/add - ᴀᴅᴅ/ᴇᴅɪᴛ ᴄʜᴀɴɴᴇʟ & ᴘʀɪᴄᴇs\n/channels - ᴍᴀɴᴀɢᴇ ᴇxɪsᴛɪɴɢ ᴄʜᴀɴɴᴇʟs", parse_mode="HTML")
+        bot.send_message(message.chat.id, "✅ <b>ADMIN PANEL ACTIVE!</b>\n\n/add - ADD/EDIT CHANNEL & PRICES\n/channels - MANAGE EXISTING CHANNELS", parse_mode="HTML")
     else:
-        bot.send_message(message.chat.id, "ᴡᴇʟᴄᴏᴍᴇ! ᴛᴏ ᴊᴏɪɴ ᴀ ᴄʜᴀɴɴᴇʟ, ᴘʟᴇᴀsᴇ ᴜsᴇ ᴛʜᴇ sᴘᴇᴄɪғɪᴄ ʟɪɴᴋ ᴘʀᴏᴠɪᴅᴇᴅ ʙʏ ᴛʜᴇ ᴀᴅᴍɪɴɪsᴛʀᴀᴛᴏʀ.")
+        bot.send_message(message.chat.id, "WELCOME! TO JOIN A CHANNEL, PLEASE USE THE SPECIFIC LINK PROVIDED BY THE ADMINISTRATOR.")
 
 @bot.message_handler(commands=['channels'], func=lambda m: m.from_user.id == ADMIN_ID)
 def list_channels(message):
@@ -175,10 +175,10 @@ def list_channels(message):
     cursor = channels_col.find({"admin_id": ADMIN_ID})
     count = 0
     for ch in cursor:
-        markup.add(InlineKeyboardButton(f"ᴄʜᴀɴɴᴇʟ: {ch['name']}", callback_data=f"manage_{ch['channel_id']}"))
+        markup.add(InlineKeyboardButton(f"CHANNEL: {ch['name']}", callback_data=f"manage_{ch['channel_id']}"))
         count += 1
     
-    markup.add(InlineKeyboardButton("➕ ᴀᴅᴅ ɴᴇᴡ ᴄʜᴀɴɴᴇʟ", callback_data="add_new"))
+    markup.add(InlineKeyboardButton("➕ ADD NEW CHANNEL", callback_data="add_new"))
     
     if count == 0:
         bot.send_message(ADMIN_ID, "No channels found. Click below to add one.", reply_markup=markup)
@@ -267,25 +267,25 @@ def user_pays(call):
     markup = InlineKeyboardMarkup()
     
     if payment_page_url:
-        markup.add(InlineKeyboardButton("⚡ ᴀᴜᴛᴏᴍᴀᴛɪᴄ ᴘᴀʏ (ʀᴀᴢᴏʀᴘᴀʏ)", url=payment_page_url))
+        markup.add(InlineKeyboardButton("⚡ AUTOMATIC PAY (RAZORPAY)", url=payment_page_url))
         payment_text = (
-            f"🚀 <b>ᴀᴜᴛᴏᴍᴀᴛɪᴄ ᴘᴀʏ:</b> ᴘᴀʏ sᴇᴄᴜʀᴇʟʏ ᴠɪᴀ ʀᴀᴢᴏʀᴘᴀʏ, ᴀɴᴅ ʀᴇᴄᴇɪᴠᴇ ʏᴏᴜʀ ɪɴᴠɪᴛᴇ ʟɪɴᴋ ɪɴsᴛᴀɴᴛʟʏ.\n"
-            f"🛠️ <b>ᴍᴀɴᴜᴀʟ ᴘᴀʏ:</b> sᴄᴀɴ ᴏᴜʀ ᴜᴘɪ ϙʀ ᴄᴏᴅᴇ, sᴇɴᴅ ᴘᴀʏᴍᴇɴᴛ, ᴀɴᴅ ᴡᴀɪᴛ ғᴏʀ ᴀᴅᴍɪɴ ᴀᴘᴘʀᴏᴠᴀʟ."
+            f"🚀 <b>AUTOMATIC PAY:</b> Pay securely via Razorpay, and receive your invite link instantly.\n"
+            f"🛠️ <b>MANUAL PAY:</b> Scan our UPI QR code, send payment, and wait for admin approval."
         )
     else:
-        payment_text = f"🛠️ ᴘʟᴇᴀsᴇ ᴄʟɪᴄᴋ ᴛʜᴇ ʙᴜᴛᴛᴏɴ ʙᴇʟᴏᴡ ᴛᴏ ᴍᴀᴋᴇ ᴀ <b>ᴍᴀɴᴜᴀʟ ᴘᴀʏᴍᴇɴᴛ</b> ᴜsɪɴɢ ᴛʜᴇ ϙʀ ᴄᴏᴅᴇ."
+        payment_text = f"🛠️ Please click the button below to make a <b>MANUAL PAYMENT</b> using the QR code."
 
-    markup.add(InlineKeyboardButton("✏️ ᴍᴀɴᴜᴀʟ ᴘᴀʏ (ᴜᴘɪ ϙʀ)", callback_data=f"manual_{ch_id}_{mins}"))
-    markup.add(InlineKeyboardButton("📞 ᴄᴏɴᴛᴀᴄᴛ ᴀᴅᴍɪɴ", url=f"https://t.me/{CONTACT_USERNAME}"))
+    markup.add(InlineKeyboardButton("✏️ MANUAL PAY (UPI QR)", callback_data=f"manual_{ch_id}_{mins}"))
+    markup.add(InlineKeyboardButton("📞 CONTACT ADMIN", url=f"https://t.me/{CONTACT_USERNAME}"))
 
-    readable_plan = format_small_caps_duration(mins)
+    readable_plan = format_clean_duration(mins)
 
     bot.send_message(
         call.message.chat.id,
-        f"🛒 <b>ᴄʜᴏᴏsᴇ ᴘᴀʏᴍᴇɴᴛ ᴍᴇᴛʜᴏᴅ</b>\n\n"
-        f"<b>ᴄʜᴀɴɴᴇʟ:</b> {ch_data['name']}\n"
-        f"<b>ᴘ🇱🇦🇳:</b> {readable_plan}\n"
-        f"<b>ᴘ🇷🇮🇨🇪:</b> ₹{price}\n\n"
+        f"🛒 <b>CHOOSE PAYMENT METHOD</b>\n\n"
+        f"<b>CHANNEL:</b> {ch_data['name']}\n"
+        f"<b>PLAN:</b> {readable_plan}\n"
+        f"<b>PRICE:</b> ₹{price}\n\n"
         f"{payment_text}",
         reply_markup=markup,
         parse_mode="HTML"
@@ -303,19 +303,19 @@ def manual_checkout(call):
     qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=upi://pay?pa={UPI_ID}%26am={price}%26cu=INR"
     
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("✅ ɪ ʜᴀᴠᴇ ᴘᴀɪᴅ (ᴠᴇʀɪғʏ)", callback_data=f"paid_{ch_id}_{mins}"))
-    markup.add(InlineKeyboardButton("📞 ᴄᴏɴᴛᴀᴄᴛ ᴀᴅᴍɪɴ", url=f"https://t.me/{CONTACT_USERNAME}"))
+    markup.add(InlineKeyboardButton("✅ I HAVE PAID (VERIFY)", callback_data=f"paid_{ch_id}_{mins}"))
+    markup.add(InlineKeyboardButton("📞 CONTACT ADMIN", url=f"https://t.me/{CONTACT_USERNAME}"))
     
-    readable_plan = format_small_caps_duration(mins)
+    readable_plan = format_clean_duration(mins)
 
     bot.send_photo(
         call.message.chat.id, 
         qr_url, 
-        caption=f"📝 <b>ᴍᴀɴᴜᴀʟ ᴘᴀʏᴍᴇɴᴛ sᴇᴛᴜᴘ</b>\n\n"
-                f"<b>ᴘ🇱🇦🇳:</b> {readable_plan}\n"
-                f"<b>ᴘ🇷🇮🇨🇪:</b> ₹{price}\n"
-                f"<b>ᴜᴘɪ ɪᴅ:</b> <code>{UPI_ID}</code>\n\n"
-                f"ᴘʟᴇᴀsᴇ sᴄᴀɴ ᴛʜɪs ϙʀ ᴄᴏᴅᴇ, ᴄᴏᴍᴘﻠᴇᴛᴇ ʏᴏᴜʀ ᴛʀᴀɴsᴀᴄᴛɪᴏɴ, ᴀɴᴅ ᴛʜᴇɴ ᴄʟɪᴄᴋ **'ɪ ʜᴀᴠᴇ ᴘᴀɪᴅ'** ғᴏʀ ᴍᴀɴᴜᴀʟ ᴠᴇʀɪғɪᴄᴀᴛɪᴏɴ.", 
+        caption=f"📝 <b>MANUAL PAYMENT SETUP</b>\n\n"
+                f"<b>PLAN:</b> {readable_plan}\n"
+                f"<b>PRICE:</b> ₹{price}\n"
+                f"<b>UPI ID:</b> <code>{UPI_ID}</code>\n\n"
+                f"Please scan this QR code, complete your transaction, and then click **'I HAVE PAID'** for manual verification.", 
         reply_markup=markup, 
         parse_mode="HTML"
     )
@@ -329,24 +329,24 @@ def admin_notify(call):
     price = ch_data['plans'][mins]
     
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("✅ ᴀᴘᴘʀᴏᴠᴇ", callback_data=f"app_{user.id}_{ch_id}_{mins}"))
-    markup.add(InlineKeyboardButton("❌ ʀᴇᴊᴇᴄᴛ", callback_data=f"rej_{user.id}"))
+    markup.add(InlineKeyboardButton("✅ APPROVE", callback_data=f"app_{user.id}_{ch_id}_{mins}"))
+    markup.add(InlineKeyboardButton("❌ REJECT", callback_data=f"rej_{user.id}"))
     
-    readable_plan = format_small_caps_duration(mins)
+    readable_plan = format_clean_duration(mins)
 
     bot.send_message(
         ADMIN_ID, 
-        f"⚠️ <b>ᴍᴀɴᴜᴀʟ ᴘᴀʏᴍᴇɴᴛ ᴠᴇʀɪғɪᴄᴀᴛɪᴏɴ ʀᴇϙᴜɪʀᴇᴅ!</b>\n\n"
-        f"<b>ᴜsᴇʀ:</b> {user.first_name}\n"
-        f"<b>ᴄʜᴀɴɴᴇʟ:</b> {ch_data['name']}\n"
-        f"<b>ᴘʟᴀɴ:</b> {readable_plan}\n"
-        f"<b>ᴘ🇷🇮🇨🇪:</b> ₹{price}", 
+        f"⚠️ <b>MANUAL PAYMENT VERIFICATION REQUIRED!</b>\n\n"
+        f"<b>USER:</b> {user.first_name}\n"
+        f"<b>CHANNEL:</b> {ch_data['name']}\n"
+        f"<b>PLAN:</b> {readable_plan}\n"
+        f"<b>PRICE:</b> ₹{price}", 
         reply_markup=markup, 
         parse_mode="HTML"
     )
     
-    u_markup = InlineKeyboardMarkup().add(InlineKeyboardButton("📞 ᴄᴏɴᴛᴀᴄᴛ ᴀᴅᴍɪɴ", url=f"https://t.me/{CONTACT_USERNAME}"))
-    bot.send_message(call.message.chat.id, "✅ ʏᴏᴜʀ ᴍᴀɴᴜᴀʟ ᴘᴀʏᴍᴇɴᴛ ʀᴇϙᴜᴇsᴛ ʜᴀs ʙᴇᴇɴ sᴇɴᴛ ᴛᴏ ᴛʜᴇ ᴀᴅᴍɪɴ. ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ ғᴏʀ ᴄᴏɴғɪʀᴍᴀᴛɪᴏɴ.", reply_markup=u_markup)
+    u_markup = InlineKeyboardMarkup().add(InlineKeyboardButton("📞 CONTACT ADMIN", url=f"https://t.me/{CONTACT_USERNAME}"))
+    bot.send_message(call.message.chat.id, "✅ Your manual payment request has been sent to the admin. Please wait for confirmation.", reply_markup=u_markup)
 
 # --- APPROVAL & EXPIRY (Manual) ---
 
@@ -364,14 +364,14 @@ def approve_now(call):
         
         users_col.update_one({"user_id": u_id, "channel_id": ch_id}, {"$set": {"expiry": expiry_datetime.timestamp()}}, upsert=True)
         
-        readable_plan = format_small_caps_duration(mins)
+        readable_plan = format_clean_duration(mins)
 
         bot.send_message(
             u_id, 
-            f"🥳 <b>ᴘᴀʏᴍᴇɴᴛ ᴀᴘᴘʀᴏᴠᴇᴅ (ᴍᴀɴᴜᴀʟ)!</b>\n\n"
-            f"sᴜʙsᴄʀɪᴘᴛɪᴏɴ: {readable_plan}\n\n"
-            f"ᴊᴏɪɴ ʟɪɴᴋ: {link.invite_link}\n\n"
-            f"⚠️ <b>ɴᴏᴛᴇ:</b> ᴀᴄᴄᴇss ʟɪɴᴋ ᴡɪʟʟ ᴇxᴘɪʀᴇ ɪɴ {readable_plan}.", 
+            f"🥳 <b>PAYMENT APPROVED (MANUAL)!</b>\n\n"
+            f"SUBSCRIPTION: {readable_plan}\n\n"
+            f"JOIN LINK: {link.invite_link}\n\n"
+            f"⚠️ <b>NOTE:</b> ACCESS LINK WILL EXPIRE IN {readable_plan}.", 
             parse_mode="HTML"
         )
         bot.edit_message_text(f"✅ Approved user {u_id} for {readable_plan}.", call.message.chat.id, call.message.message_id)
@@ -384,7 +384,7 @@ def reject_now(call):
     bot.answer_callback_query(call.id)
     u_id = int(call.data.split('_')[1])
     try:
-        bot.send_message(u_id, "❌ <b>ᴘᴀʏᴍᴇɴᴛ ʀᴇᴊᴇᴄᴛᴇᴅ!</b>\n\nʏᴏʀ ᴍᴀɴᴜᴀʟ ᴘᴀʏᴍᴇɴᴛ ᴠᴇʀɪғɪᴄᴀᴛɪᴏɴ ғᴀɪʟᴇᴅ. ᴘʟᴇᴀsᴇ ᴄᴏɴᴛᴀᴄᴛ ᴛʜᴇ ᴀᴅᴍɪɴ.", parse_mode="HTML")
+        bot.send_message(u_id, "❌ <b>PAYMENT REJECTED!</b>\n\nYour manual payment verification failed. Please contact the admin.", parse_mode="HTML")
         bot.edit_message_text(f"❌ Rejected user {u_id} request.", call.message.chat.id, call.message.message_id)
     except Exception as e:
         bot.send_message(ADMIN_ID, f"❌ Error while rejecting: {e}")
@@ -416,9 +416,9 @@ def kick_expired_users():
             bot.unban_chat_member(user['channel_id'], user['user_id'])
             
             rejoin_url = f"https://t.me/{bot_username}?start={user['channel_id']}"
-            markup = InlineKeyboardMarkup().add(InlineKeyboardButton("🔄 ʀᴇ-ᴊᴏɪɴ / ʀᴇɴᴇᴡ", url=rejoin_url))
+            markup = InlineKeyboardMarkup().add(InlineKeyboardButton("🔄 RE-JOIN / RENEW", url=rejoin_url))
             
-            bot.send_message(user['user_id'], "⚠️ ʏᴏᴜʀ sᴜʙsᴄʀɪᴘᴛɪᴏɴ ʜᴀs ᴇxᴘɪʀᴇᴅ.\n\nᴛᴏ ᴊᴏɪɴ ᴀɢᴀɪɴ ᴏʀ ʀᴇɴᴇᴡ, ᴘʟᴇᴀsᴇ ᴄʟɪᴄᴋ ᴛʜᴇ ʙᴜᴛᴛᴏɴ ʙᴇʟᴏᴡ:", reply_markup=markup)
+            bot.send_message(user['user_id'], "⚠️ YOUR SUBSCRIPTION HAS EXPIRED.\n\nTO JOIN AGAIN OR RENEW, PLEASE CLICK THE BUTTON BELOW:", reply_markup=markup)
             users_col.delete_one({"_id": user['_id']})
         except Exception as e: 
             print(f"Error kicking user {user['user_id']}: {e}")
