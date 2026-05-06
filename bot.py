@@ -228,7 +228,7 @@ def finalize_channel(message, ch_id, ch_name):
     except:
         bot.send_message(ADMIN_ID, "❌ Invalid format. Please use `Min:Price, Min:Price`. Use /add to retry.")
 
-# --- USER: SELECT PAYMENT METHOD (HYBRID FLOW) ---
+# --- USER: SELECT PAYMENT METHOD ---
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('select_'))
 def user_pays(call):
@@ -319,51 +319,28 @@ def manual_checkout(call):
         parse_mode="HTML"
     )
 
-# --- SCREENSHOT SOLICITATION ---
+# --- SCREENSHOT PROOF PROMPT ---
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('paid_'))
 def ask_for_screenshot(call):
     bot.answer_callback_query(call.id)
     _, ch_id, mins = call.data.split('_')
     
-    # User inline keyboard for direct Cancel action
-    markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("❌ CANCEL", callback_data=f"cancel_upload_{ch_id}"))
-
     msg = bot.send_message(
         call.message.chat.id, 
         "📷 <b>SUBMIT SCREENSHOT PROOF</b>\n\n"
         "Please **send/upload the screenshot receipt** of your payment here to complete verification.\n\n"
         "<i>Make sure the transaction ID/UTR is visible on the screenshot.</i>\n\n"
-        "👉 <i>If you want to cancel, please click the Cancel button below or type 'cancel'.</i>", 
-        reply_markup=markup,
+        "👉 <i>If you want to cancel, please type <b>cancel</b> or send <b>/cancel</b>.</i>", 
         parse_mode="HTML"
     )
     # Register next step handler to receive image
     bot.register_next_step_handler(msg, receive_screenshot, int(ch_id), int(mins))
 
-# --- CANCEL CALLBACK HANDLER ---
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('cancel_upload_'))
-def cancel_upload_receipt(call):
-    bot.answer_callback_query(call.id)
-    ch_id = int(call.data.split('_')[2])
-    
-    # Clear active step listeners immediately
-    bot.clear_step_handlers_by_chat_id(chat_id=call.message.chat.id)
-    
-    bot.send_message(
-        call.message.chat.id, 
-        "❌ <b>Process Cancelled.</b>\nYour payment submission request has been discarded. Going back to plans menu...",
-        parse_mode="HTML"
-    )
-    # Return user back to plans list
-    show_plans_menu(call.message.chat.id, ch_id)
-
-# --- RESOLVED STEP HANDLER & CANCEL BYPASS ---
+# --- COMMAND DISCARD / SCREENSHOT RECEIVER ---
 
 def receive_screenshot(message, ch_id, mins):
-    # Bypass 1: If user manually typing 'cancel' or '/cancel'
+    # Check if user typed cancel or /cancel
     if message.text and message.text.lower() in ['/cancel', 'cancel']:
         bot.clear_step_handlers_by_chat_id(chat_id=message.chat.id)
         bot.send_message(message.chat.id, "❌ <b>Process Cancelled.</b> Going back to plans menu...", parse_mode="HTML")
@@ -372,17 +349,12 @@ def receive_screenshot(message, ch_id, mins):
 
     # Check if user sent a photo
     if not message.photo:
-        # Create a retry screen with Cancel option
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("❌ CANCEL", callback_data=f"cancel_upload_{ch_id}"))
-        
         msg = bot.send_message(
             message.chat.id, 
-            "❌ <b>Error:</b> You didn't send a photo. Please send a valid receipt image or click **CANCEL** below.",
-            reply_markup=markup,
+            "❌ <b>Error:</b> You didn't send a photo.\n\nPlease upload a valid screenshot image of your payment receipt, or type <b>cancel</b> to discard this request.",
             parse_mode="HTML"
         )
-        # Re-register so next message triggers this same receiver
+        # Re-register step so they can try again or cancel
         bot.register_next_step_handler(msg, receive_screenshot, ch_id, mins)
         return
 
