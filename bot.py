@@ -4,13 +4,103 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pymongo import MongoClient
 from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
-from flask import Flask
+from flask import Flask, request, jsonify
 from threading import Thread
+import razorpay
+import uuid
 
-# --- RENDER KEEP-ALIVE SERVER ---
+# --- CONFIGURATION (Environment Variables) ---
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+MONGO_URI = os.getenv('MONGO_URI')
+ADMIN_ID = int(os.getenv('ADMIN_ID'))
+UPI_ID = os.getenv('UPI_ID')  # Manual Payment ke liye
+CONTACT_USERNAME = os.getenv('CONTACT_USERNAME')
+
+# Razorpay Details
+RAZORPAY_KEY_ID = os.getenv('RAZORPAY_KEY_ID')
+RAZORPAY_KEY_SECRET = os.getenv('RAZORPAY_KEY_SECRET')
+RAZORPAY_WEBHOOK_SECRET = os.getenv('RAZORPAY_WEBHOOK_SECRET')
+
+# Clients Setup
+bot = telebot.TeleBot(BOT_TOKEN)
+client = MongoClient(MONGO_URI)
+db = client['sub_management']
+channels_col = db['channels']
+users_col = db['users']
+transactions_col = db['transactions']
+
+rz_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+
+# --- RENDER KEEP-ALIVE & RAZORPAY WEBHOOK ---
 app = Flask('')
+
 @app.route('/')
-def home(): return "Bot is running and healthy!"
+def home(): 
+    return "Bot is running and healthy!"
+
+# Razorpay Automatic Webhook
+@app.route('/razorpay_webhook', methods=['POST'])
+def razorpay_webhook():
+    payload = request.data
+    signature = request.headers.get('X-Razorpay-Signature')
+
+    try:
+        rz_client.utility.verify_webhook_signature(
+            payload.decode('utf-8'), 
+            signature, 
+            RAZORPAY_WEBHOOK_SECRET
+        )
+    except Exception as e:
+        print(f"❌ Webhook Verification Failed: {e}")
+        return jsonify({"status": "failed"}), 400
+
+    data = request.json
+    event = data.get("event")
+
+    if event == "payment.captured":
+        payment_entity = data['payload']['payment']['entity']
+        order_id = payment_entity.get('order_id')
+
+        tx = transactions_col.find_one({"order_id": order_id, "status": "pending"})
+        if tx:
+            u_id = tx['user_id']
+            ch_id = tx['channel_id']
+            mins = tx['minutes']
+
+            transactions_col.update_one({"order_id": order_id}, {"$set": {"status": "success", "payment_id": payment_entity.get('id')}})
+
+            try:
+                expiry_datetime = datetime.now(timezone.utc) + timedelta(minutes=mins)
+                expiry_ts = int(expiry_datetime.timestamp())
+
+                link = bot.create_chat_invite_link(ch_id, member_limit=1, expire_date=expiry_ts)
+
+                users_col.update_one(
+                    {"user_id": u_id, "channel_id": ch_id}, 
+                    {"$set": {"expiry": expiry_datetime.timestamp()}}, 
+                    upsert=True
+                )
+
+                bot.send_message(
+                    u_id, 
+                    f"🥳 <b>Payment Automatically Verified!</b>\n\n"
+                    f"Subscription Active: {mins} Minutes\n\n"
+                    f"👇 Join using the link below:\n{link.invite_link}\n\n"
+                    f"⚠️ <b>Note:</b> Access link will expire in {mins} minutes.", 
+                    parse_mode="HTML"
+                )
+
+                bot.send_message(
+                    ADMIN_ID, 
+                    f"✅ <b>Razorpay Auto-Approved!</b>\n\n"
+                    f"User: {u_id}\n"
+                    f"Amount: ₹{tx['amount']}\n"
+                    f"Plan: {mins} Mins"
+                )
+            except Exception as e:
+                print(f"Error sending auto-link: {e}")
+
+    return jsonify({"status": "ok"}), 200
 
 def run_web():
     port = int(os.environ.get("PORT", 5000))
@@ -19,19 +109,6 @@ def run_web():
 def keep_alive():
     Thread(target=run_web).start()
 
-# --- CONFIGURATION (Environment Variables) ---
-BOT_TOKEN = os.getenv('BOT_TOKEN')
-MONGO_URI = os.getenv('MONGO_URI')
-ADMIN_ID = int(os.getenv('ADMIN_ID'))
-UPI_ID = os.getenv('UPI_ID')
-CONTACT_USERNAME = os.getenv('CONTACT_USERNAME')
-
-bot = telebot.TeleBot(BOT_TOKEN)
-client = MongoClient(MONGO_URI)
-db = client['sub_management']
-channels_col = db['channels']
-users_col = db['users']
-
 # --- ADMIN LOGIC ---
 
 @bot.message_handler(commands=['start'])
@@ -39,14 +116,12 @@ def start_handler(message):
     user_id = message.from_user.id
     text = message.text.split()
 
-    # User entry via Deep Link
     if len(text) > 1:
         try:
             ch_id = int(text[1])
             ch_data = channels_col.find_one({"channel_id": ch_id})
             if ch_data:
                 markup = InlineKeyboardMarkup()
-                # Display Dynamic Plans
                 for p_time, p_price in ch_data['plans'].items():
                     label = f"{p_time} Min" if int(p_time) < 60 else f"{int(p_time)//1440} Days"
                     markup.add(InlineKeyboardButton(f"💳 {label} - ₹{p_price}", callback_data=f"select_{ch_id}_{p_time}"))
@@ -62,7 +137,6 @@ def start_handler(message):
         except Exception as e: 
             print(f"Error in deep link: {e}")
 
-    # Admin Panel Greeting
     if user_id == ADMIN_ID:
         bot.send_message(message.chat.id, "✅ Admin Panel Active!\n\n/add - Add/Edit Channel & Prices\n/channels - Manage Existing Channels")
     else:
@@ -89,7 +163,6 @@ def add_channel_start(message):
     msg = bot.send_message(ADMIN_ID, "Please ensure the bot is an Admin in your channel, then FORWARD any message from that channel here.")
     bot.register_next_step_handler(msg, get_plans)
 
-# Callback for Add New button
 @bot.callback_query_handler(func=lambda call: call.data == "add_new")
 def cb_add_new(call):
     bot.answer_callback_query(call.id)
@@ -128,26 +201,89 @@ def finalize_channel(message, ch_id, ch_name):
     except:
         bot.send_message(ADMIN_ID, "❌ Invalid format. Please use `Min:Price, Min:Price`. Use /add to retry.")
 
-# --- USER: PAYMENT FLOW ---
+# --- USER: SELECT PAYMENT METHOD (HYBRID FLOW) ---
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('select_'))
 def user_pays(call):
     bot.answer_callback_query(call.id)
     _, ch_id, mins = call.data.split('_')
     ch_data = channels_col.find_one({"channel_id": int(ch_id)})
+    price = int(ch_data['plans'][mins])
+    
+    # Do options taiyyar karein: Automatic link aur Manual link
+    try:
+        # 1. Razorpay Order Create karein background mein (Automatic option ke liye)
+        rz_order = rz_client.order.create({
+            "amount": price * 100, 
+            "currency": "INR", 
+            "receipt": f"rcpt_{call.from_user.id}_{ch_id}",
+            "payment_capture": 1
+        })
+        order_id = rz_order['id']
+
+        transactions_col.insert_one({
+            "order_id": order_id,
+            "user_id": call.from_user.id,
+            "channel_id": int(ch_id),
+            "minutes": int(mins),
+            "amount": price,
+            "status": "pending",
+            "timestamp": datetime.now(timezone.utc)
+        })
+
+        payment_page_url = f"https://api.razorpay.com/v1/checkout/hosted?key_id={RAZORPAY_KEY_ID}&order_id={order_id}"
+    except Exception as e:
+        payment_page_url = None
+        print(f"Razorpay Order Error: {e}")
+
+    # Buttons layout create karein
+    markup = InlineKeyboardMarkup()
+    
+    # Agar Razorpay integration active hai, toh Auto pay button dikhayein
+    if payment_page_url:
+        markup.add(InlineKeyboardButton("⚡ Automatic Pay (Razorpay)", url=payment_page_url))
+    
+    # Manual payment ke liye purana QR setup page trigger karne wala button
+    markup.add(InlineKeyboardButton("✏️ Manual Pay (UPI QR)", callback_data=f"manual_{ch_id}_{mins}"))
+    markup.add(InlineKeyboardButton("📞 Contact Admin", url=f"https://t.me/{CONTACT_USERNAME}"))
+
+    bot.send_message(
+        call.message.chat.id,
+        f"🛒 <b>Choose Payment Method</b>\n\n"
+        f"<b>Channel:</b> {ch_data['name']}\n"
+        f"<b>Plan:</b> {mins} Minutes\n"
+        f"<b>Price:</b> ₹{price}\n\n"
+        f"Aap payment kaise karna chahte hain? Niche diye gaye tarike select karein:\n\n"
+        f"🚀 <b>Automatic Pay:</b> Razorpay ke zariye payment karein, link turant automatically mil jayega.\n"
+        f"🛠️ <b>Manual Pay:</b> Apne manual QR code se pay karein, aur request admin approval ke liye bhein.",
+        reply_markup=markup,
+        parse_mode="HTML"
+    )
+
+# --- MANUAL PAYMENT SUB-FLOW ---
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('manual_'))
+def manual_checkout(call):
+    bot.answer_callback_query(call.id)
+    _, ch_id, mins = call.data.split('_')
+    ch_data = channels_col.find_one({"channel_id": int(ch_id)})
     price = ch_data['plans'][mins]
     
-    # Properly encode URL parameters to prevent issues with special characters
+    # Dynamic Manual QR Generate karein
     qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=upi://pay?pa={UPI_ID}%26am={price}%26cu=INR"
     
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("✅ I Have Paid", callback_data=f"paid_{ch_id}_{mins}"))
+    markup.add(InlineKeyboardButton("✅ I Have Paid (Verify)", callback_data=f"paid_{ch_id}_{mins}"))
     markup.add(InlineKeyboardButton("📞 Contact Admin", url=f"https://t.me/{CONTACT_USERNAME}"))
     
     bot.send_photo(
         call.message.chat.id, 
         qr_url, 
-        caption=f"Plan: {mins} Minutes\nPrice: ₹{price}\nUPI ID: <code>{UPI_ID}</code>\n\nPlease complete the payment and click 'I Have Paid'.", 
+        caption=f"📝 <b>Manual Payment Setup</b>\n\n"
+                f"<b>Plan:</b> {mins} Minutes\n"
+                f"<b>Price:</b> ₹{price}\n"
+                f"<b>UPI ID:</b> <code>{UPI_ID}</code>\n\n"
+                f"Please scan this QR code, complete your payment, and then click **'I Have Paid'** for verification.", 
         reply_markup=markup, 
         parse_mode="HTML"
     )
@@ -164,10 +300,9 @@ def admin_notify(call):
     markup.add(InlineKeyboardButton("✅ Approve", callback_data=f"app_{user.id}_{ch_id}_{mins}"))
     markup.add(InlineKeyboardButton("❌ Reject", callback_data=f"rej_{user.id}"))
     
-    # HTML Parse Mode to avoid crash on special characters in user names or channel names
     bot.send_message(
         ADMIN_ID, 
-        f"⚠️ <b>Payment Verification Required!</b>\n\n"
+        f"⚠️ <b>Manual Payment Verification Required!</b>\n\n"
         f"<b>User:</b> {user.first_name}\n"
         f"<b>Channel:</b> {ch_data['name']}\n"
         f"<b>Plan:</b> {mins} Mins\n"
@@ -177,9 +312,9 @@ def admin_notify(call):
     )
     
     u_markup = InlineKeyboardMarkup().add(InlineKeyboardButton("📞 Contact Admin", url=f"https://t.me/{CONTACT_USERNAME}"))
-    bot.send_message(call.message.chat.id, "✅ Your payment request has been sent. Please wait for Admin approval.", reply_markup=u_markup)
+    bot.send_message(call.message.chat.id, "✅ Your manual payment request has been sent to Admin. Please wait for confirmation.", reply_markup=u_markup)
 
-# --- APPROVAL & EXPIRY ---
+# --- APPROVAL & EXPIRY (Manual) ---
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('app_'))
 def approve_now(call):
@@ -188,21 +323,19 @@ def approve_now(call):
     u_id, ch_id, mins = int(u_id), int(ch_id), int(mins)
     
     try:
-        # Timezone standard safe conversion
         expiry_datetime = datetime.now(timezone.utc) + timedelta(minutes=mins)
         expiry_ts = int(expiry_datetime.timestamp())
 
-        # Link expires when sub ends
         link = bot.create_chat_invite_link(ch_id, member_limit=1, expire_date=expiry_ts)
         
         users_col.update_one({"user_id": u_id, "channel_id": ch_id}, {"$set": {"expiry": expiry_datetime.timestamp()}}, upsert=True)
         
         bot.send_message(
             u_id, 
-            f"🥳 <b>Payment Approved!</b>\n\n"
+            f"🥳 <b>Payment Approved (Manual)!</b>\n\n"
             f"Subscription: {mins} Minutes\n\n"
             f"Join Link: {link.invite_link}\n\n"
-            f"⚠️ <b>Note:</b> This link and your access will expire in {mins} minutes.", 
+            f"⚠️ <b>Note:</b> Access link will expire in {mins} minutes.", 
             parse_mode="HTML"
         )
         bot.edit_message_text(f"✅ Approved user {u_id} for {mins} mins.", call.message.chat.id, call.message.message_id)
@@ -210,13 +343,12 @@ def approve_now(call):
     except Exception as e:
         bot.send_message(ADMIN_ID, f"❌ Error while approving: {e}")
 
-# Reject Callback Handler (Added missing feature to prevent hanging buttons)
 @bot.callback_query_handler(func=lambda call: call.data.startswith('rej_'))
 def reject_now(call):
     bot.answer_callback_query(call.id)
     u_id = int(call.data.split('_')[1])
     try:
-        bot.send_message(u_id, "❌ <b>Payment Rejected!</b>\n\nYour payment verification failed. If you think this is a mistake, please contact the admin.", parse_mode="HTML")
+        bot.send_message(u_id, "❌ <b>Payment Rejected!</b>\n\nYour manual payment verification failed. Please contact the admin.", parse_mode="HTML")
         bot.edit_message_text(f"❌ Rejected user {u_id} request.", call.message.chat.id, call.message.message_id)
     except Exception as e:
         bot.send_message(ADMIN_ID, f"❌ Error while rejecting: {e}")
@@ -259,15 +391,12 @@ def kick_expired_users():
 if __name__ == '__main__':
     keep_alive()
     
-    # Scheduler setup
     scheduler = BackgroundScheduler()
     scheduler.add_job(kick_expired_users, 'interval', minutes=1)
     scheduler.start()
     
-    # Active webhooks aur pending sessions ko clear karne ke liye
     print("Deleting webhooks and clearing old sessions...")
     bot.delete_webhook(drop_pending_updates=True) 
     
     print("Bot is running...")
-    # non_stop=True yahan se remove kar diya gaya hai, ab clash nahi hoga
     bot.infinity_polling(timeout=20, long_polling_timeout=10)
