@@ -29,6 +29,29 @@ channels_col = db['channels']
 users_col = db['users']
 transactions_col = db['transactions']
 
+# --- RAZORPAY SMART INITIALIZATION ---
+rz_client = None
+if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
+    try:
+        rz_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+        print("✅ Razorpay Client successfully initialized!")
+    except Exception as e:
+        print(f"⚠️ Razorpay Initialization Error: {e}")
+else:
+    print("ℹ️ Razorpay keys not found/incomplete. Running in Manual UPI Only Mode.")
+
+# --- HELPER FUNCTION: SMALL CAPS TIME FORMATTING ---
+def format_small_caps_duration(minutes):
+    """Converts raw minutes into beautiful, consistent Small Caps durations."""
+    mins = int(minutes)
+    if mins < 60:
+        return f"{mins} ᴍɪɴ"
+    elif mins >= 60 and mins < 1440:
+        hours = mins // 60
+        return f"{hours} ʜᴏᴜʀs" if hours > 1 else f"{hours} ʜᴏᴜʀ"
+    else:
+        days = mins // 1440
+        return f"{days} ᴅᴀʏs" if days > 1 else f"{days} ᴅᴀʏ"
 
 # --- RENDER KEEP-ALIVE & RAZORPAY WEBHOOK ---
 app = Flask('')
@@ -83,12 +106,14 @@ def razorpay_webhook():
                     upsert=True
                 )
 
+                readable_plan = format_small_caps_duration(mins)
+
                 bot.send_message(
                     u_id, 
                     f"🥳 <b>ᴘᴀʏᴍᴇɴᴛ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ ᴠᴇʀɪғɪᴇᴅ!</b>\n\n"
-                    f"sᴜʙsᴄʀɪᴘᴛɪᴏɴ ᴀᴄᴛɪᴠᴇ: {mins} ᴍɪɴᴜᴛᴇs\n\n"
+                    f"sᴜʙsᴄʀɪᴘᴛɪᴏɴ ᴀᴄᴛɪᴠᴇ: {readable_plan}\n\n"
                     f"👇 ᴊᴏɪɴ ᴜsɪɴɢ ᴛʜᴇ ʟɪɴᴋ ʙᴇʟᴏᴡ:\n{link.invite_link}\n\n"
-                    f"⚠️ <b>ɴᴏᴛᴇ:</b> ᴀᴄᴄᴇss ʟɪɴᴋ ᴡɪʟʟ ᴇxᴘɪʀᴇ ɪɴ {mins} ᴍɪɴᴜᴛᴇs.", 
+                    f"⚠️ <b>ɴᴏᴛᴇ:</b> ᴀᴄᴄᴇss ʟɪɴᴋ ᴡɪʟʟ ᴇxᴘɪʀᴇ ɪɴ {readable_plan}.", 
                     parse_mode="HTML"
                 )
 
@@ -97,7 +122,7 @@ def razorpay_webhook():
                     f"✅ <b>ʀᴀᴢᴏʀᴘᴀʏ ᴀᴜᴛᴏ-ᴀᴘᴘʀᴏᴠᴇᴅ!</b>\n\n"
                     f"ᴜsᴇʀ: {u_id}\n"
                     f"ᴀᴍᴏᴜɴᴛ: ₹{tx['amount']}\n"
-                    f"ᴘʟᴀɴ: {mins} ᴍɪɴs"
+                    f"ᴘʟᴀɴ: {readable_plan}"
                 )
             except Exception as e:
                 print(f"Error sending auto-link: {e}")
@@ -125,7 +150,7 @@ def start_handler(message):
             if ch_data:
                 markup = InlineKeyboardMarkup()
                 for p_time, p_price in ch_data['plans'].items():
-                    label = f"{p_time} ᴍɪɴ" if int(p_time) < 60 else f"{int(p_time)//1440} ᴅᴀʏs"
+                    label = format_small_caps_duration(p_time)
                     markup.add(InlineKeyboardButton(f"💳 {label} - ₹{p_price}", callback_data=f"select_{ch_id}_{p_time}"))
                 
                 markup.add(InlineKeyboardButton("📞 ᴄᴏɴᴛᴀᴄᴛ ᴀᴅᴍɪɴ", url=f"https://t.me/{CONTACT_USERNAME}"))
@@ -253,12 +278,14 @@ def user_pays(call):
     markup.add(InlineKeyboardButton("✏️ ᴍᴀɴᴜᴀʟ ᴘᴀʏ (ᴜᴘɪ ϙʀ)", callback_data=f"manual_{ch_id}_{mins}"))
     markup.add(InlineKeyboardButton("📞 ᴄᴏɴᴛᴀᴄᴛ ᴀᴅᴍɪɴ", url=f"https://t.me/{CONTACT_USERNAME}"))
 
+    readable_plan = format_small_caps_duration(mins)
+
     bot.send_message(
         call.message.chat.id,
         f"🛒 <b>ᴄʜᴏᴏsᴇ ᴘᴀʏᴍᴇɴᴛ ᴍᴇᴛʜᴏᴅ</b>\n\n"
         f"<b>ᴄʜᴀɴɴᴇʟ:</b> {ch_data['name']}\n"
-        f"<b>ᴘʟᴀɴ:</b> {mins} ᴍɪɴᴜᴛes\n"
-        f"<b>ᴘʀɪᴄᴇ:</b> ₹{price}\n\n"
+        f"<b>ᴘ🇱🇦🇳:</b> {readable_plan}\n"
+        f"<b>ᴘ🇷🇮🇨🇪:</b> ₹{price}\n\n"
         f"{payment_text}",
         reply_markup=markup,
         parse_mode="HTML"
@@ -279,14 +306,16 @@ def manual_checkout(call):
     markup.add(InlineKeyboardButton("✅ ɪ ʜᴀᴠᴇ ᴘᴀɪᴅ (ᴠᴇʀɪғʏ)", callback_data=f"paid_{ch_id}_{mins}"))
     markup.add(InlineKeyboardButton("📞 ᴄᴏɴᴛᴀᴄᴛ ᴀᴅᴍɪɴ", url=f"https://t.me/{CONTACT_USERNAME}"))
     
+    readable_plan = format_small_caps_duration(mins)
+
     bot.send_photo(
         call.message.chat.id, 
         qr_url, 
         caption=f"📝 <b>ᴍᴀɴᴜᴀʟ ᴘᴀʏᴍᴇɴᴛ sᴇᴛᴜᴘ</b>\n\n"
-                f"<b>ᴘʟᴀɴ:</b> {mins} ᴍɪɴᴜᴛᴇs\n"
-                f"<b>ᴘʀɪᴄᴇ:</b> ₹{price}\n"
+                f"<b>ᴘ🇱🇦🇳:</b> {readable_plan}\n"
+                f"<b>ᴘ🇷🇮🇨🇪:</b> ₹{price}\n"
                 f"<b>ᴜᴘɪ ɪᴅ:</b> <code>{UPI_ID}</code>\n\n"
-                f"ᴘʟᴇᴀsᴇ sᴄᴀɴ ᴛʜɪs ϙʀ ᴄᴏᴅᴇ, ᴄᴏᴍᴘʟᴇᴛᴇ ʏᴏᴜʀ ᴛʀᴀɴsᴀᴄᴛɪᴏɴ, ᴀɴᴅ ᴛʜᴇɴ ᴄʟɪᴄᴋ **'ɪ ʜᴀᴠᴇ ᴘᴀɪᴅ'** ғᴏʀ ᴍᴀɴᴜᴀʟ ᴠᴇʀɪғɪᴄᴀᴛɪᴏɴ.", 
+                f"ᴘʟᴇᴀsᴇ sᴄᴀɴ ᴛʜɪs ϙʀ ᴄᴏᴅᴇ, ᴄᴏᴍᴘﻠᴇᴛᴇ ʏᴏᴜʀ ᴛʀᴀɴsᴀᴄᴛɪᴏɴ, ᴀɴᴅ ᴛʜᴇɴ ᴄʟɪᴄᴋ **'ɪ ʜᴀᴠᴇ ᴘᴀɪᴅ'** ғᴏʀ ᴍᴀɴᴜᴀʟ ᴠᴇʀɪғɪᴄᴀᴛɪᴏɴ.", 
         reply_markup=markup, 
         parse_mode="HTML"
     )
@@ -303,13 +332,15 @@ def admin_notify(call):
     markup.add(InlineKeyboardButton("✅ ᴀᴘᴘʀᴏᴠᴇ", callback_data=f"app_{user.id}_{ch_id}_{mins}"))
     markup.add(InlineKeyboardButton("❌ ʀᴇᴊᴇᴄᴛ", callback_data=f"rej_{user.id}"))
     
+    readable_plan = format_small_caps_duration(mins)
+
     bot.send_message(
         ADMIN_ID, 
         f"⚠️ <b>ᴍᴀɴᴜᴀʟ ᴘᴀʏᴍᴇɴᴛ ᴠᴇʀɪғɪᴄᴀᴛɪᴏɴ ʀᴇϙᴜɪʀᴇᴅ!</b>\n\n"
-        f"<b>uѕеr:</b> {user.first_name}\n"
+        f"<b>ᴜsᴇʀ:</b> {user.first_name}\n"
         f"<b>ᴄʜᴀɴɴᴇʟ:</b> {ch_data['name']}\n"
-        f"<b>ᴘʟᴀɴ:</b> {mins} ᴍɪɴs\n"
-        f"<b>ᴘʀɪᴄᴇ:</b> ₹{price}", 
+        f"<b>ᴘʟᴀɴ:</b> {readable_plan}\n"
+        f"<b>ᴘ🇷🇮🇨🇪:</b> ₹{price}", 
         reply_markup=markup, 
         parse_mode="HTML"
     )
@@ -333,15 +364,17 @@ def approve_now(call):
         
         users_col.update_one({"user_id": u_id, "channel_id": ch_id}, {"$set": {"expiry": expiry_datetime.timestamp()}}, upsert=True)
         
+        readable_plan = format_small_caps_duration(mins)
+
         bot.send_message(
             u_id, 
             f"🥳 <b>ᴘᴀʏᴍᴇɴᴛ ᴀᴘᴘʀᴏᴠᴇᴅ (ᴍᴀɴᴜᴀʟ)!</b>\n\n"
-            f"sᴜʙsᴄʀɪᴘᴛɪᴏɴ: {mins} ᴍɪɴᴜᴛᴇs\n\n"
+            f"sᴜʙsᴄʀɪᴘᴛɪᴏɴ: {readable_plan}\n\n"
             f"ᴊᴏɪɴ ʟɪɴᴋ: {link.invite_link}\n\n"
-            f"⚠️ <b>ɴᴏᴛᴇ:</b> ᴀᴄᴄᴇss ʟɪɴᴋ ᴡɪʟʟ ᴇxᴘɪʀᴇ ɪɴ {mins} ᴍɪɴᴜᴛᴇs.", 
+            f"⚠️ <b>ɴᴏᴛᴇ:</b> ᴀᴄᴄᴇss ʟɪɴᴋ ᴡɪʟʟ ᴇxᴘɪʀᴇ ɪɴ {readable_plan}.", 
             parse_mode="HTML"
         )
-        bot.edit_message_text(f"✅ Approved user {u_id} for {mins} mins.", call.message.chat.id, call.message.message_id)
+        bot.edit_message_text(f"✅ Approved user {u_id} for {readable_plan}.", call.message.chat.id, call.message.message_id)
         
     except Exception as e:
         bot.send_message(ADMIN_ID, f"❌ Error while approving: {e}")
@@ -351,7 +384,7 @@ def reject_now(call):
     bot.answer_callback_query(call.id)
     u_id = int(call.data.split('_')[1])
     try:
-        bot.send_message(u_id, "❌ <b>ᴘᴀʏᴍᴇɴᴛ ʀᴇᴊᴇᴄᴛᴇᴅ!</b>\n\nʏᴏᴜʀ ᴍᴀɴᴜᴀʟ ᴘᴀʏᴍᴇɴᴛ ᴠᴇʀɪғɪᴄᴀᴛɪᴏɴ ғᴀɪʟᴇᴅ. ᴘʟᴇᴀsᴇ ᴄᴏɴᴛᴀᴄᴛ ᴛʜᴇ ᴀᴅᴍɪɴ.", parse_mode="HTML")
+        bot.send_message(u_id, "❌ <b>ᴘᴀʏᴍᴇɴᴛ ʀᴇᴊᴇᴄᴛᴇᴅ!</b>\n\nʏᴏʀ ᴍᴀɴᴜᴀʟ ᴘᴀʏᴍᴇɴᴛ ᴠᴇʀɪғɪᴄᴀᴛɪᴏɴ ғᴀɪʟᴇᴅ. ᴘʟᴇᴀsᴇ ᴄᴏɴᴛᴀᴄᴛ ᴛʜᴇ ᴀᴅᴍɪɴ.", parse_mode="HTML")
         bot.edit_message_text(f"❌ Rejected user {u_id} request.", call.message.chat.id, call.message.message_id)
     except Exception as e:
         bot.send_message(ADMIN_ID, f"❌ Error while rejecting: {e}")
@@ -398,8 +431,13 @@ if __name__ == '__main__':
     scheduler.add_job(kick_expired_users, 'interval', minutes=1)
     scheduler.start()
     
-    print("Deleting webhooks and clearing old sessions...")
-    bot.delete_webhook(drop_pending_updates=True) 
+    # Forceful Webhook deletion on Telegram endpoint before starting long polling
+    print("Clearing stuck telegram hook sessions...")
+    try:
+        bot.remove_webhook()
+        bot.delete_webhook(drop_pending_updates=True)
+    except Exception as e:
+        print(f"Non-fatal bypass: {e}")
     
     print("Bot is running...")
     bot.infinity_polling(timeout=20, long_polling_timeout=10)
