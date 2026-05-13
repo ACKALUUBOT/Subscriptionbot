@@ -1,139 +1,167 @@
 import os
 import telebot
-import urllib.parse
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pymongo import MongoClient
-from datetime import datetime, timedelta, timezone
-from flask import Flask, request, jsonify
-from threading import Thread
+from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
-import razorpay
+from flask import Flask
+from threading import Thread
 
-# --- 1. CONFIGURATION ---
+# --- RENDER KEEP-ALIVE SERVER ---
+app = Flask('')
+@app.route('/')
+def home(): return "Bot is running and healthy!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    Thread(target=run_web).start()
+
+# --- CONFIGURATION ---
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 MONGO_URI = os.getenv('MONGO_URI')
 ADMIN_ID = int(os.getenv('ADMIN_ID'))
 UPI_ID = os.getenv('UPI_ID')
-RAZORPAY_KEY_ID = os.getenv('RAZORPAY_KEY_ID')
-RAZORPAY_KEY_SECRET = os.getenv('RAZORPAY_KEY_SECRET')
-RAZORPAY_WEBHOOK_SECRET = os.getenv('RAZORPAY_WEBHOOK_SECRET')
+CONTACT_USERNAME = os.getenv('CONTACT_USERNAME')
 
 bot = telebot.TeleBot(BOT_TOKEN)
 client = MongoClient(MONGO_URI)
 db = client['sub_management']
-channels_col, users_col, transactions_col = db['channels'], db['users'], db['transactions']
+channels_col = db['channels']
+users_col = db['users']
 
-rz_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)) if RAZORPAY_KEY_ID else None
+# --- ADMIN: CHANNEL MANAGEMENT ---
 
-# --- 2. KEYBOARDS ---
-def get_main_menu():
-    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-    stories = list(channels_col.find())
-    for i, s in enumerate(stories, start=1):
-        markup.add(KeyboardButton(f"{i}. {s['name']} [ ₹{s['price']} ] Nᴇᴡ"))
-    return markup
-
-# --- 3. AUTO-APPROVE LOGIC (PROCESSOR) ---
-def process_approval(u_id, ch_id, mins):
-    expiry_ts = int((datetime.now(timezone.utc) + timedelta(minutes=int(mins))).timestamp())
-    link = bot.create_chat_invite_link(int(ch_id), member_limit=1, expire_date=expiry_ts)
-    users_col.update_one({"user_id": int(u_id), "channel_id": int(ch_id)}, {"$set": {"expiry": expiry_ts}}, upsert=True)
-    
-    markup = InlineKeyboardMarkup().add(InlineKeyboardButton("🚀 Jᴏɪɴ Nᴏᴡ", url=link.invite_link))
-    bot.send_message(u_id, "✅ <b>Pᴀʏᴍᴇɴᴛ Vᴇʀɪғɪᴇᴅ!</b>\nYᴏᴜʀ ᴀᴄᴄᴇss ɪs ɴᴏᴡ ᴀᴄᴛɪᴠᴇ.", reply_markup=markup, parse_mode="HTML")
-
-# --- 4. WEBHOOK FOR RAZORPAY (AUTO-APPROVE) ---
-app = Flask('')
-@app.route('/razorpay_webhook', methods=['POST'])
-def rz_webhook():
-    payload = request.data
-    signature = request.headers.get('X-Razorpay-Signature')
-    try:
-        rz_client.utility.verify_webhook_signature(payload.decode('utf-8'), signature, RAZORPAY_WEBHOOK_SECRET)
-        data = request.json
-        if data['event'] == "payment.captured":
-            order_id = data['payload']['payment']['entity']['order_id']
-            tx = transactions_col.find_one({"order_id": order_id})
-            if tx:
-                process_approval(tx['user_id'], tx['channel_id'], tx['mins'])
-    except: pass
-    return jsonify({"status": "ok"}), 200
-
-@app.route('/')
-def home(): return "Bᴏᴛ Is Aʟɪᴠᴇ"
-
-# --- 5. USER FLOW (CATCHING STORY) ---
 @bot.message_handler(commands=['start'])
 def start_handler(message):
-    bot.send_message(message.chat.id, "<b>〖 Aᴠᴀɪʟᴀʙʟᴇ Sᴛᴏʀɪᴇs 〗</b>", reply_markup=get_main_menu(), parse_mode="HTML")
+    user_id = message.from_user.id
+    text = message.text.split()
 
-@bot.message_handler(func=lambda message: " [ ₹" in message.text)
-def handle_story(message):
-    try:
-        name = message.text.split('. ')[1].split(' [')[0].strip()
-        ch = channels_col.find_one({"name": name})
-        if ch:
-            cap = f"🎬 <b>{ch['name'].upper()}</b>\n💰 <b>Pʀɪᴄᴇ: ₹{ch['price']}</b>\n📖 <b>{ch['desc']}</b>"
-            markup = InlineKeyboardMarkup()
-            markup.add(InlineKeyboardButton("✅ CONFIRM", callback_data=f"conf_{ch['channel_id']}"))
-            bot.send_photo(message.chat.id, ch['photo'], caption=cap, reply_markup=markup, parse_mode="HTML")
-    except: pass
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('conf_'))
-def show_terms(call):
-    ch_id = call.data.split('_')[1]
-    ch = channels_col.find_one({"channel_id": int(ch_id)})
-    text = f"👤 <b>Usᴇʀ:</b> {call.from_user.first_name}\n📖 <b>Sᴛᴏʀʏ: {ch['name']}</b>\n\n<b>Aɢʀᴇᴇ ᴛᴏ Tᴇʀᴍs?</b>"
-    markup = InlineKeyboardMarkup().add(InlineKeyboardButton("I Aᴄᴄᴇᴘᴛ", callback_data=f"paymeth_{ch_id}"))
-    bot.edit_message_caption(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('paymeth_'))
-def select_pay(call):
-    ch_id = call.data.split('_')[1]
-    markup = InlineKeyboardMarkup().add(InlineKeyboardButton("⚡ UPI QR", callback_data=f"qr_{ch_id}"),
-                                       InlineKeyboardButton("💳 Rᴀᴢᴏʀᴘᴀʏ (Aᴜᴛᴏ)", callback_data=f"rz_{ch_id}"))
-    bot.edit_message_caption("Sᴇʟᴇᴄᴛ Pᴀʏᴍᴇɴᴛ Mᴇᴛʜᴏᴅ:", call.message.chat.id, call.message.message_id, reply_markup=markup)
-
-# --- 6. ADMIN COMMANDS (ADD/MANAGE) ---
-@bot.message_handler(commands=['add'])
-def add_story(message):
-    if message.from_user.id != ADMIN_ID: return
-    msg = bot.send_message(ADMIN_ID, "Fᴏʀᴡᴀʀᴅ ᴀ ᴍᴇssᴀɢᴇ ғʀᴏᴍ ᴛʜᴇ sᴛᴏʀʏ ᴄʜᴀɴɴᴇʟ:")
-    bot.register_next_step_handler(msg, step1)
-
-def step1(message):
-    if message.forward_from_chat:
-        cid, name = message.forward_from_chat.id, message.forward_from_chat.title
-        msg = bot.send_message(ADMIN_ID, "Sᴇɴᴅ: `Pʜᴏᴛᴏ | Eᴘs | OʟᴅPʀɪᴄᴇ | NᴇᴡPʀɪᴄᴇ | Mɪɴs | Dᴇsᴄ`")
-        bot.register_next_step_handler(msg, step2, cid, name)
-
-def step2(message, cid, name):
-    p = message.text.split('|')
-    channels_col.update_one({"channel_id": cid}, {"$set": {"name": name, "photo": p[0].strip(), "eps": p[1].strip(), "old_price": p[2].strip(), "price": p[3].strip(), "mins": p[4].strip(), "desc": p[5].strip()}}, upsert=True)
-    bot.send_message(ADMIN_ID, "✅ Sᴛᴏʀʏ Aᴅᴅᴇᴅ!")
-
-# --- 7. AUTO-KICK SYSTEM ---
-def auto_kick():
-    now = datetime.now(timezone.utc).timestamp()
-    expired = users_col.find({"expiry": {"$lte": now}})
-    for u in expired:
+    # User entry via Deep Link
+    if len(text) > 1:
         try:
-            bot.ban_chat_member(u['channel_id'], u['user_id'])
-            bot.unban_chat_member(u['channel_id'], u['user_id'])
-            users_col.delete_one({"_id": u['_id']})
+            ch_id = int(text[1])
+            ch_data = channels_col.find_one({"channel_id": ch_id})
+            if ch_data:
+                markup = InlineKeyboardMarkup()
+                for p_time, p_price in ch_data['plans'].items():
+                    label = f"{p_time} Min" if int(p_time) < 60 else f"{int(p_time)//1440} Days"
+                    markup.add(InlineKeyboardButton(f"💳 {label} - ₹{p_price}", callback_data=f"select_{ch_id}_{p_time}"))
+                
+                markup.add(InlineKeyboardButton("📞 Contact Admin", url=f"https://t.me/{CONTACT_USERNAME}"))
+                bot.send_message(message.chat.id, 
+                    f"Welcome!\n\nYou are joining: *{ch_data['name']}*.\n\nPlease select a subscription plan:", 
+                    reply_markup=markup, parse_mode="Markdown")
+                return
         except: pass
 
-# --- 8. MANUAL APPROVAL BUTTONS ---
-@bot.callback_query_handler(func=lambda call: call.data.startswith('adm_'))
-def admin_manual(call):
-    d = call.data.split('_')
-    if d[1] == "app": process_approval(d[2], d[3], d[4])
-    else: bot.send_message(d[2], "❌ Pᴀʏᴍᴇɴᴛ Rᴇᴊᴇᴄᴛᴇᴅ!")
-    bot.edit_message_caption(f"Dᴇᴄɪsɪᴏɴ: {d[1]}", call.message.chat.id, call.message.message_id)
+    if user_id == ADMIN_ID:
+        bot.send_message(message.chat.id, "✅ **Admin Panel Active**\n\n/add - Add New Channel\n/channels - List My Channels", parse_mode="Markdown")
+    else:
+        bot.send_message(message.chat.id, "Welcome! Please use an invite link to join a channel.")
 
-if __name__ == "__main__":
+@bot.message_handler(commands=['add'], func=lambda m: m.from_user.id == ADMIN_ID)
+def add_channel_start(message):
+    msg = bot.send_message(ADMIN_ID, "Forward any message from your channel here (Make sure Bot is Admin there).")
+    bot.register_next_step_handler(msg, get_plans)
+
+def get_plans(message):
+    if message.forward_from_chat:
+        ch_id = message.forward_from_chat.id
+        ch_name = message.forward_from_chat.title
+        msg = bot.send_message(ADMIN_ID, f"Channel: *{ch_name}*\n\nEnter plans as `Min:Price, Min:Price` (e.g., `1440:99, 43200:299`)", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, finalize_channel, ch_id, ch_name)
+    else:
+        bot.send_message(ADMIN_ID, "❌ Error: Please forward a message from the channel.")
+
+def finalize_channel(message, ch_id, ch_name):
+    try:
+        plans_dict = {p.split(':')[0].strip(): p.split(':')[1].strip() for p in message.text.split(',')}
+        channels_col.update_one({"channel_id": ch_id}, {"$set": {"name": ch_name, "plans": plans_dict, "admin_id": ADMIN_ID}}, upsert=True)
+        bot.send_message(ADMIN_ID, f"✅ Channel Added!\nLink: `https://t.me/{bot.get_me().username}?start={ch_id}`", parse_mode="Markdown")
+    except:
+        bot.send_message(ADMIN_ID, "❌ Format Error. Use `Min:Price`.")
+
+# --- USER: PAYMENT & SCREENSHOT FLOW ---
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('select_'))
+def user_pays(call):
+    _, ch_id, mins = call.data.split('_')
+    ch_data = channels_col.find_one({"channel_id": int(ch_id)})
+    price = ch_data['plans'][mins]
+    
+    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=upi://pay?pa={UPI_ID}%26am={price}%26cu=INR"
+    
+    msg = bot.send_photo(call.message.chat.id, qr_url, 
+                   caption=f"💰 **Payment Details**\n\nPlan: {mins} Mins\nPrice: ₹{price}\nUPI: `{UPI_ID}`\n\n👇 **MUST:** Send the Payment Screenshot here now.", 
+                   parse_mode="Markdown")
+    
+    bot.register_next_step_handler(msg, process_screenshot, ch_id, mins)
+
+def process_screenshot(message, ch_id, mins):
+    if message.content_type != 'photo':
+        bot.reply_to(message, "❌ Invalid! Please send a Photo/Screenshot of payment. Try /start again.")
+        return
+
+    user = message.from_user
+    ch_data = channels_col.find_one({"channel_id": int(ch_id)})
+    
+    # Notify Admin
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("✅ Approve", callback_data=f"app_{user.id}_{ch_id}_{mins}"))
+    markup.add(InlineKeyboardButton("❌ Reject", callback_data=f"rej_{user.id}"))
+    
+    bot.send_photo(ADMIN_ID, message.photo[-1].file_id, 
+                   caption=f"🔔 **New Payment Request**\n\nUser: {user.first_name} (@{user.username})\nChannel: {ch_data['name']}\nPlan: {mins} Mins", 
+                   reply_markup=markup, parse_mode="Markdown")
+    
+    bot.send_message(message.chat.id, "✅ Screenshot received! Please wait for Admin approval.")
+
+# --- ADMIN: APPROVE / REJECT ---
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('app_'))
+def approve_now(call):
+    _, u_id, ch_id, mins = call.data.split('_')
+    u_id, ch_id, mins = int(u_id), int(ch_id), int(mins)
+    
+    try:
+        expiry_date = datetime.utcnow() + timedelta(minutes=mins)
+        # Create single-use link
+        link = bot.create_chat_invite_link(ch_id, member_limit=1, expire_date=int((datetime.utcnow() + timedelta(days=1)).timestamp()))
+        
+        users_col.update_one({"user_id": u_id, "channel_id": ch_id}, {"$set": {"expiry": expiry_date}}, upsert=True)
+        
+        bot.send_message(u_id, f"🥳 **Payment Approved!**\n\nYour Link: {link.invite_link}\nValid for: {mins} Minutes.", parse_mode="Markdown")
+        bot.edit_message_caption("✅ User Approved & Link Sent.", call.message.chat.id, call.message.message_id)
+    except Exception as e:
+        bot.send_message(ADMIN_ID, f"Error: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('rej_'))
+def reject_now(call):
+    u_id = int(call.data.split('_')[1])
+    bot.send_message(u_id, "❌ **Payment Rejected!**\nYour screenshot was invalid or payment not received.", parse_mode="Markdown")
+    bot.edit_message_caption("❌ Request Rejected.", call.message.chat.id, call.message.message_id)
+
+# --- AUTO-KICK SYSTEM ---
+
+def kick_expired_users():
+    now = datetime.utcnow()
+    expired = users_col.find({"expiry": {"$lte": now}})
+    for user in expired:
+        try:
+            bot.ban_chat_member(user['channel_id'], user['user_id'])
+            bot.unban_chat_member(user['channel_id'], user['user_id'])
+            bot.send_message(user['user_id'], "⚠️ Your subscription has expired and you've been removed. Re-join via /start.")
+            users_col.delete_one({"_id": user['_id']})
+        except: pass
+
+# --- STARTUP ---
+if __name__ == '__main__':
+    keep_alive()
     scheduler = BackgroundScheduler()
-    scheduler.add_job(auto_kick, 'interval', minutes=1)
+    scheduler.add_job(kick_expired_users, 'interval', minutes=1)
     scheduler.start()
-    Thread(target=lambda: app.run(host='0.0.0.0', port=5000)).start()
+    print("Bot is starting...")
     bot.infinity_polling()
