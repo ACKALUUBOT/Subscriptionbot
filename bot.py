@@ -33,9 +33,7 @@ rz_client = None
 if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
     try:
         rz_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
-        print("✅ Razorpay Active")
-    except:
-        print("⚠️ Razorpay Error")
+    except: pass
 
 # --- HELPERS ---
 def format_clean_duration(minutes):
@@ -48,18 +46,17 @@ def format_clean_duration(minutes):
         days = mins // 1440
         return f"{days} DAY" if days == 1 else f"{days} DAYS"
 
-# --- FLASK & WEBHOOK ---
+# --- FLASK WEBHOOK ---
 app = Flask('')
-
 @app.route('/')
 def home(): return "Bot is running!"
 
 @app.route('/razorpay_webhook', methods=['POST'])
 def razorpay_webhook():
     if not rz_client: return jsonify({"status": "no_rz"}), 400
-    payload = request.data
-    signature = request.headers.get('X-Razorpay-Signature')
     try:
+        payload = request.data
+        signature = request.headers.get('X-Razorpay-Signature')
         rz_client.utility.verify_webhook_signature(payload.decode('utf-8'), signature, RAZORPAY_WEBHOOK_SECRET)
         data = request.json
         if data.get("event") == "payment.captured":
@@ -71,13 +68,12 @@ def razorpay_webhook():
                 link = bot.create_chat_invite_link(tx['channel_id'], member_limit=1, expire_date=expiry_ts)
                 users_col.update_one({"user_id": tx['user_id'], "channel_id": tx['channel_id']}, {"$set": {"expiry": expiry_ts}}, upsert=True)
                 transactions_col.update_one({"order_id": order_id}, {"$set": {"status": "success"}})
-                
                 markup = InlineKeyboardMarkup().add(InlineKeyboardButton("🚀 JOIN NOW", url=link.invite_link))
                 bot.send_message(tx['user_id'], "🥳 <b>PAYMENT VERIFIED!</b>", reply_markup=markup, parse_mode="HTML")
     except: pass
     return jsonify({"status": "ok"}), 200
 
-# --- ADMIN COMMANDS ---
+# --- ADMIN PANEL & CHANNEL MANAGEMENT ---
 @bot.message_handler(commands=['start'])
 def start_handler(message):
     text = message.text.split()
@@ -88,83 +84,126 @@ def start_handler(message):
         except: pass
     
     if message.from_user.id == ADMIN_ID:
-        bot.send_message(message.chat.id, "🛠 <b>ADMIN PANEL</b>\n\n/add - Add Channel\n/channels - Manage", parse_mode="HTML")
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("📺 MANAGE CHANNELS", callback_data="manage_all"))
+        markup.add(InlineKeyboardButton("➕ ADD NEW CHANNEL", callback_data="add_new"))
+        bot.send_message(message.chat.id, "🛠 <b>ADMIN CONTROL PANEL</b>", reply_markup=markup, parse_mode="HTML")
     else:
-        bot.send_message(message.chat.id, "Welcome! Please use an invite link.")
+        bot.send_message(message.chat.id, "Welcome! Use the link provided by Admin.")
 
-@bot.message_handler(commands=['add'], func=lambda m: m.from_user.id == ADMIN_ID)
-def add_channel_start(message):
-    msg = bot.send_message(ADMIN_ID, "Forward any message from your channel here.")
+@bot.callback_query_handler(func=lambda call: call.data == "manage_all")
+def list_channels_callback(call):
+    markup = InlineKeyboardMarkup()
+    channels = channels_col.find({"admin_id": ADMIN_ID})
+    found = False
+    for ch in channels:
+        found = True
+        markup.add(InlineKeyboardButton(f"📡 {ch['name']}", callback_data=f"edit_ch_{ch['channel_id']}"))
+    
+    markup.add(InlineKeyboardButton("➕ ADD NEW", callback_data="add_new"))
+    markup.add(InlineKeyboardButton("🔙 BACK", callback_data="admin_home"))
+    
+    msg = "📋 <b>YOUR CONNECTED CHANNELS:</b>" if found else "❌ No channels added yet."
+    bot.edit_message_text(msg, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_home")
+def admin_home(call):
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("📺 MANAGE CHANNELS", callback_data="manage_all"))
+    markup.add(InlineKeyboardButton("➕ ADD NEW CHANNEL", callback_data="add_new"))
+    bot.edit_message_text("🛠 <b>ADMIN CONTROL PANEL</b>", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("edit_ch_"))
+def edit_channel(call):
+    ch_id = int(call.data.split('_')[2])
+    ch = channels_col.find_one({"channel_id": ch_id})
+    if ch:
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🗑 DELETE CHANNEL", callback_data=f"del_ch_{ch_id}"))
+        markup.add(InlineKeyboardButton("🔙 BACK", callback_data="manage_all"))
+        
+        info = f"<b>CHANNEL:</b> {ch['name']}\n<b>ID:</b> <code>{ch_id}</code>\n\n<b>Link:</b>\n<code>t.me/{bot.get_me().username}?start={ch_id}</code>"
+        bot.edit_message_text(info, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("del_ch_"))
+def delete_channel(call):
+    ch_id = int(call.data.split('_')[2])
+    channels_col.delete_one({"channel_id": ch_id})
+    bot.answer_callback_query(call.id, "✅ Channel Deleted")
+    list_channels_callback(call)
+
+@bot.callback_query_handler(func=lambda call: call.data == "add_new")
+def add_new_callback(call):
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(ADMIN_ID, "📤 Forward any message from your channel here.")
     bot.register_next_step_handler(msg, get_plans)
 
 def get_plans(message):
     if message.forward_from_chat:
         ch_id, ch_name = message.forward_from_chat.id, message.forward_from_chat.title
-        msg = bot.send_message(ADMIN_ID, f"Channel: {ch_name}\nEnter Plans (Mins:Price, Mins:Price):")
+        msg = bot.send_message(ADMIN_ID, f"✅ Channel: {ch_name}\n\n📝 Enter Plans in this format:\n`Minutes:Price, Minutes:Price` \n(Example: `1440:100, 10080:500`)")
         bot.register_next_step_handler(msg, get_demo_input, ch_id, ch_name)
     else:
-        bot.send_message(ADMIN_ID, "❌ Forward a message from the channel.")
+        bot.send_message(ADMIN_ID, "❌ Please forward a message from a channel.")
 
 def get_demo_input(message, ch_id, ch_name):
     try:
         plans = {p.split(':')[0].strip(): p.split(':')[1].strip() for p in message.text.split(',')}
-        msg = bot.send_message(ADMIN_ID, "Send Demo Link or type 'none':")
+        msg = bot.send_message(ADMIN_ID, "🔗 Send Demo/Episodes Link (or type 'none'):")
         bot.register_next_step_handler(msg, finalize_channel, ch_id, ch_name, plans)
-    except: bot.send_message(ADMIN_ID, "❌ Invalid format.")
+    except:
+        bot.send_message(ADMIN_ID, "❌ Invalid format. Use `Mins:Price, Mins:Price`.")
 
 def finalize_channel(message, ch_id, ch_name, plans):
     data = {"name": ch_name, "plans": plans, "admin_id": ADMIN_ID}
     if message.text.lower() != 'none': data["demo_link"] = message.text
     channels_col.update_one({"channel_id": ch_id}, {"$set": data}, upsert=True)
-    bot.send_message(ADMIN_ID, f"✅ Done! Link: <code>t.me/{bot.get_me().username}?start={ch_id}</code>", parse_mode="HTML")
+    bot.send_message(ADMIN_ID, f"✅ <b>Setup Complete!</b>\n\nChannel Link:\n<code>t.me/{bot.get_me().username}?start={ch_id}</code>", parse_mode="HTML")
 
-# --- USER FLOW & QR FIX ---
+# --- USER SIDE FLOW ---
 def show_plans_menu(chat_id, ch_id):
     ch = channels_col.find_one({"channel_id": ch_id})
     if ch:
         markup = InlineKeyboardMarkup()
         for t, p in ch['plans'].items():
             markup.add(InlineKeyboardButton(f"💳 {format_clean_duration(t)} - ₹{p}", callback_data=f"pay_{ch_id}_{t}"))
-        if 'demo_link' in ch: markup.add(InlineKeyboardButton("📺 DEMO", url=ch['demo_link']))
-        bot.send_message(chat_id, f"Join <b>{ch['name']}</b>:", reply_markup=markup, parse_mode="HTML")
+        if 'demo_link' in ch: markup.add(InlineKeyboardButton("📺 WATCH DEMO", url=ch['demo_link']))
+        bot.send_message(chat_id, f"Welcome! Joining: <b>{ch['name']}</b>\nChoose a plan:", reply_markup=markup, parse_mode="HTML")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('pay_'))
-def select_method(call):
+def select_payment_method(call):
     _, ch_id, mins = call.data.split('_')
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("⚡ QR CODE (MANUAL)", callback_data=f"qr_{ch_id}_{mins}"))
+    markup.add(InlineKeyboardButton("⚡ UPI QR (FAST)", callback_data=f"qr_{ch_id}_{mins}"))
     if rz_client:
         markup.add(InlineKeyboardButton("💳 ONLINE (RAZORPAY)", callback_data=f"rz_{ch_id}_{mins}"))
-    bot.edit_message_text("Choose Payment Method:", call.message.chat.id, call.message.message_id, reply_markup=markup)
+    bot.edit_message_text("Select Payment Method:", call.message.chat.id, call.message.message_id, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('qr_'))
-def send_manual_qr(call):
+def send_qr_code(call):
     _, ch_id, mins = call.data.split('_')
     ch = channels_col.find_one({"channel_id": int(ch_id)})
     price = ch['plans'][mins]
-    
-    # --- FIX: PROPER UPI ENCODING ---
-    upi_url = f"upi://pay?pa={UPI_ID}&pn=Subscription&am={price}&cu=INR"
+    upi_url = f"upi://pay?pa={UPI_ID}&pn=Admin&am={price}&cu=INR"
     encoded_upi = urllib.parse.quote(upi_url)
     qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={encoded_upi}"
-    
-    markup = InlineKeyboardMarkup().add(InlineKeyboardButton("✅ PAID (SEND PROOF)", callback_data=f"proof_{ch_id}_{mins}"))
-    bot.send_photo(call.message.chat.id, qr_url, caption=f"Scan to Pay: ₹{price}\nUPI: <code>{UPI_ID}</code>", reply_markup=markup, parse_mode="HTML")
+    markup = InlineKeyboardMarkup().add(InlineKeyboardButton("✅ PAID - SEND PROOF", callback_data=f"proof_{ch_id}_{mins}"))
+    bot.send_photo(call.message.chat.id, qr_url, caption=f"💰 Pay: ₹{price}\nUPI: <code>{UPI_ID}</code>\n\nScan and send screenshot.", reply_markup=markup, parse_mode="HTML")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('proof_'))
 def ask_proof(call):
     _, ch_id, mins = call.data.split('_')
-    msg = bot.send_message(call.message.chat.id, "Please send payment screenshot.")
+    msg = bot.send_message(call.message.chat.id, "Please upload the payment screenshot 📷")
     bot.register_next_step_handler(msg, receive_proof, int(ch_id), int(mins))
 
 def receive_proof(message, ch_id, mins):
-    if not message.photo: return bot.send_message(message.chat.id, "❌ Send a photo.")
+    if not message.photo: return bot.send_message(message.chat.id, "❌ Error: Send a photo screenshot.")
     markup = InlineKeyboardMarkup().add(
         InlineKeyboardButton("✅ APPROVE", callback_data=f"app_{message.from_user.id}_{ch_id}_{mins}"),
         InlineKeyboardButton("❌ REJECT", callback_data=f"rej_{message.from_user.id}")
     )
-    bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption=f"Proof from {message.from_user.id}", reply_markup=markup)
-    bot.send_message(message.chat.id, "Sent! Wait for admin.")
+    bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption=f"New Proof from @{message.from_user.username}\nID: {message.from_user.id}", reply_markup=markup)
+    bot.send_message(message.chat.id, "✅ Proof sent! Waiting for Admin approval.")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('app_'))
 def approve_user(call):
@@ -172,24 +211,25 @@ def approve_user(call):
     expiry_ts = int((datetime.now(timezone.utc) + timedelta(minutes=int(mins))).timestamp())
     link = bot.create_chat_invite_link(int(ch_id), member_limit=1, expire_date=expiry_ts)
     users_col.update_one({"user_id": int(u_id), "channel_id": int(ch_id)}, {"$set": {"expiry": expiry_ts}}, upsert=True)
-    bot.send_message(int(u_id), "✅ Approved!", reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("JOIN", url=link.invite_link)))
-    bot.edit_message_caption("✅ User Approved", call.message.chat.id, call.message.message_id)
+    bot.send_message(int(u_id), "✅ <b>Payment Approved!</b>", reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("🚀 JOIN CHANNEL", url=link.invite_link)), parse_mode="HTML")
+    bot.edit_message_caption("✅ Approved ✅", call.message.chat.id, call.message.message_id)
 
-# --- EXPIRY CHECKER ---
+# --- AUTO KICK SCHEDULER ---
 def kick_expired():
     now = datetime.now(timezone.utc).timestamp()
-    for user in users_col.find({"expiry": {"$lte": now}}):
+    expired = users_col.find({"expiry": {"$lte": now}})
+    for user in expired:
         try:
             bot.ban_chat_member(user['channel_id'], user['user_id'])
             bot.unban_chat_member(user['channel_id'], user['user_id'])
             users_col.delete_one({"_id": user['_id']})
         except: pass
 
-# --- START ---
+# --- START BOT ---
 if __name__ == '__main__':
     Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))).start()
     scheduler = BackgroundScheduler()
     scheduler.add_job(kick_expired, 'interval', minutes=1)
     scheduler.start()
-    print("Bot is running...")
-    bot.infinity_polling(timeout=60)
+    print("Bot is alive...")
+    bot.infinity_polling()
