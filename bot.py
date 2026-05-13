@@ -46,9 +46,8 @@ def format_clean_duration(minutes):
         days = mins // 1440
         return f"{days} DAY" if days == 1 else f"{days} DAYS"
 
-# --- 3. FLASK & RAZORPAY WEBHOOK (AUTO APPROVE) ---
+# --- 3. FLASK & AUTO-APPROVE (RAZORPAY) ---
 app = Flask('')
-
 @app.route('/')
 def home(): return "Bot is Alive!"
 
@@ -74,11 +73,10 @@ def process_approval(u_id, ch_id, mins):
     expiry_ts = int((datetime.now(timezone.utc) + timedelta(minutes=int(mins))).timestamp())
     link = bot.create_chat_invite_link(int(ch_id), member_limit=1, expire_date=expiry_ts)
     users_col.update_one({"user_id": int(u_id), "channel_id": int(ch_id)}, {"$set": {"expiry": expiry_ts}}, upsert=True)
-    
-    markup = InlineKeyboardMarkup().add(InlineKeyboardButton("🚀 JOIN CHANNEL NOW", url=link.invite_link))
-    bot.send_message(u_id, "🥳 <b>PAYMENT VERIFIED!</b>\nYour access is now active.", reply_markup=markup, parse_mode="HTML")
+    markup = InlineKeyboardMarkup().add(InlineKeyboardButton("🚀 JOIN STORY NOW", url=link.invite_link))
+    bot.send_message(u_id, "🥳 <b>PAYMENT VERIFIED!</b>\nAccess Granted.", reply_markup=markup, parse_mode="HTML")
 
-# --- 4. ADMIN: ADD STORY WITH CARD ---
+# --- 4. ADMIN PANEL: MANAGEMENT LOGIC ---
 @bot.message_handler(commands=['start'])
 def start_handler(message):
     text = message.text.split()
@@ -89,13 +87,61 @@ def start_handler(message):
         except: pass
     
     if message.from_user.id == ADMIN_ID:
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("📺 MANAGE CHANNELS", callback_data="manage_all"))
-        markup.add(InlineKeyboardButton("➕ ADD NEW STORY", callback_data="add_new"))
-        bot.send_message(message.chat.id, "🛠 <b>ADMIN CONTROL PANEL</b>", reply_markup=markup, parse_mode="HTML")
+        show_admin_main(message.chat.id)
     else:
-        bot.send_message(message.chat.id, "Welcome! Please use a valid story link.")
+        bot.send_message(message.chat.id, "Welcome! Use a link to browse stories.")
 
+def show_admin_main(chat_id):
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("📺 MANAGE STORIES", callback_data="manage_all"))
+    markup.add(InlineKeyboardButton("➕ ADD NEW STORY", callback_data="add_new"))
+    bot.send_message(chat_id, "🛠 <b>ADMIN STORE MANAGER</b>", reply_markup=markup, parse_mode="HTML")
+
+@bot.callback_query_handler(func=lambda call: call.data == "manage_all")
+def list_stories(call):
+    markup = InlineKeyboardMarkup()
+    stories = channels_col.find({"admin_id": ADMIN_ID})
+    found = False
+    for s in stories:
+        found = True
+        markup.add(InlineKeyboardButton(f"📖 {s['name']}", callback_data=f"edit_ch_{s['channel_id']}"))
+    
+    markup.add(InlineKeyboardButton("➕ ADD NEW", callback_data="add_new"))
+    markup.add(InlineKeyboardButton("🔙 BACK", callback_data="admin_home"))
+    
+    text = "📋 <b>YOUR STORY LIST:</b>" if found else "❌ No stories found."
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_home")
+def callback_admin_home(call):
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("📺 MANAGE STORIES", callback_data="manage_all"))
+    markup.add(InlineKeyboardButton("➕ ADD NEW STORY", callback_data="add_new"))
+    bot.edit_message_text("🛠 <b>ADMIN STORE MANAGER</b>", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("edit_ch_"))
+def edit_story_callback(call):
+    ch_id = int(call.data.split('_')[2])
+    s = channels_col.find_one({"channel_id": ch_id})
+    if s:
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("🗑 DELETE STORY", callback_data=f"del_ch_{ch_id}"))
+        markup.add(InlineKeyboardButton("🔙 BACK", callback_data="manage_all"))
+        
+        info = (f"<b>STORY:</b> {s['name']}\n"
+                f"<b>ID:</b> <code>{ch_id}</code>\n"
+                f"<b>Price:</b> ₹{s['price']}\n\n"
+                f"<b>Deep Link:</b>\n<code>t.me/{bot.get_me().username}?start={ch_id}</code>")
+        bot.edit_message_text(info, call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("del_ch_"))
+def delete_story_callback(call):
+    ch_id = int(call.data.split('_')[2])
+    channels_col.delete_one({"channel_id": ch_id})
+    bot.answer_callback_query(call.id, "✅ Story Deleted Successfully")
+    list_stories(call)
+
+# --- 5. ADDING NEW STORY ---
 @bot.callback_query_handler(func=lambda call: call.data == "add_new")
 def add_new_step1(call):
     msg = bot.send_message(ADMIN_ID, "📤 <b>STEP 1:</b> Forward any message from the story channel.")
@@ -105,120 +151,99 @@ def add_new_step2(message):
     if message.forward_from_chat:
         ch_id = message.forward_from_chat.id
         ch_name = message.forward_from_chat.title
-        instr = (
-            f"✅ <b>Channel:</b> {ch_name}\n\n"
-            "📝 <b>STEP 2:</b> Send details in this format:\n"
-            "<code>PhotoURL | Episodes | Price | Minutes | Description</code>"
-        )
+        instr = (f"✅ <b>Channel:</b> {ch_name}\n\n"
+                 "📝 <b>STEP 2:</b> Send details:\n"
+                 "<code>PhotoURL | Episodes | Price | Minutes | Description</code>")
         msg = bot.send_message(ADMIN_ID, instr, parse_mode="HTML")
         bot.register_next_step_handler(msg, add_new_step3, ch_id, ch_name)
     else:
-        bot.send_message(ADMIN_ID, "❌ Error: Please forward from a channel.")
+        bot.send_message(ADMIN_ID, "❌ Please forward from a channel.")
 
 def add_new_step3(message, ch_id, ch_name):
     try:
         p = message.text.split('|')
         data = {"photo":p[0].strip(),"eps":p[1].strip(),"price":p[2].strip(),"mins":p[3].strip(),"desc":p[4].strip(),"name":ch_name}
-        msg = bot.send_message(ADMIN_ID, "🔗 <b>STEP 3:</b> Send Demo Link (or 'none'):")
+        msg = bot.send_message(ADMIN_ID, "🔗 <b>STEP 3:</b> Demo Link (or 'none'):")
         bot.register_next_step_handler(msg, add_new_final, ch_id, data)
-    except: bot.send_message(ADMIN_ID, "❌ Format Error. Try again.")
+    except: bot.send_message(ADMIN_ID, "❌ Format error. Use | separator.")
 
 def add_new_final(message, ch_id, data):
     if message.text.lower() != 'none': data["demo"] = message.text
     data["admin_id"] = ADMIN_ID
     channels_col.update_one({"channel_id": ch_id}, {"$set": data}, upsert=True)
-    bot.send_message(ADMIN_ID, f"✅ <b>Story Added!</b>\nLink: <code>t.me/{bot.get_me().username}?start={ch_id}</code>", parse_mode="HTML")
+    bot.send_message(ADMIN_ID, "✅ **Story Added!** Use /start to manage.")
 
-# --- 5. USER: STORY CARD & PAYMENT ---
+# --- 6. USER SIDE: STORY CARD ---
 def show_plans_menu(chat_id, ch_id):
     ch = channels_col.find_one({"channel_id": ch_id})
     if ch:
-        caption = (
-            f"🎬 <b>STORY: {ch['name']}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🔢 <b>Episodes:</b> {ch['eps']}\n"
-            f"⏳ <b>Validity:</b> {format_clean_duration(ch['mins'])}\n"
-            f"💰 <b>Price:</b> ₹{ch['price']}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📖 <b>Description:</b>\n{ch['desc']}\n"
-            f"━━━━━━━━━━━━━━━━━━━━"
-        )
+        caption = (f"🎬 <b>STORY: {ch['name']}</b>\n"
+                   f"━━━━━━━━━━━━━━━━━━━━\n"
+                   f"🔢 <b>Episodes:</b> {ch['eps']}\n"
+                   f"⏳ <b>Validity:</b> {format_clean_duration(ch['mins'])}\n"
+                   f"💰 <b>Price:</b> ₹{ch['price']}\n"
+                   f"━━━━━━━━━━━━━━━━━━━━\n"
+                   f"📖 <b>Description:</b>\n{ch['desc']}")
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton(f"💳 BUY NOW - ₹{ch['price']}", callback_data=f"pay_{ch_id}_{ch['mins']}"))
         if 'demo' in ch: markup.add(InlineKeyboardButton("📺 WATCH DEMO", url=ch['demo']))
-        
         try: bot.send_photo(chat_id, ch['photo'], caption=caption, reply_markup=markup, parse_mode="HTML")
         except: bot.send_message(chat_id, caption, reply_markup=markup, parse_mode="HTML")
 
+# --- 7. MANUAL PAY & SCHEDULER (SAME AS BEFORE) ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith('pay_'))
-def payment_options(call):
+def pay_method(call):
     _, ch_id, mins = call.data.split('_')
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("⚡ UPI QR (MANUAL)", callback_data=f"qr_{ch_id}_{mins}"))
-    if rz_client:
-        markup.add(InlineKeyboardButton("💳 ONLINE (RAZORPAY)", callback_data=f"rz_{ch_id}_{mins}"))
-    bot.edit_message_caption("Choose Payment Method:", call.message.chat.id, call.message.message_id, reply_markup=markup)
+    if rz_client: markup.add(InlineKeyboardButton("💳 RAZORPAY", callback_data=f"rz_{ch_id}_{mins}"))
+    bot.edit_message_caption("Select Method:", call.message.chat.id, call.message.message_id, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('qr_'))
-def send_manual_qr(call):
+def send_qr(call):
     _, ch_id, mins = call.data.split('_')
     ch = channels_col.find_one({"channel_id": int(ch_id)})
-    upi_url = f"upi://pay?pa={UPI_ID}&pn=Store&am={ch['price']}&cu=INR"
-    qr_api = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={urllib.parse.quote(upi_url)}"
-    
-    markup = InlineKeyboardMarkup().add(InlineKeyboardButton("✅ I HAVE PAID", callback_data=f"proof_{ch_id}_{mins}"))
-    bot.send_photo(call.message.chat.id, qr_api, caption=f"💰 Pay ₹{ch['price']} to <code>{UPI_ID}</code>\nSend screenshot after payment.", reply_markup=markup, parse_mode="HTML")
+    upi = f"upi://pay?pa={UPI_ID}&pn=Store&am={ch['price']}&cu=INR"
+    qr = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={urllib.parse.quote(upi)}"
+    markup = InlineKeyboardMarkup().add(InlineKeyboardButton("✅ PAID", callback_data=f"proof_{ch_id}_{mins}"))
+    bot.send_photo(call.message.chat.id, qr, caption=f"Pay ₹{ch['price']} to <code>{UPI_ID}</code>", reply_markup=markup, parse_mode="HTML")
 
-# --- 6. MANUAL APPROVE/REJECT LOGIC ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith('proof_'))
-def ask_screenshot(call):
+def get_proof(call):
     _, ch_id, mins = call.data.split('_')
-    msg = bot.send_message(call.message.chat.id, "📸 Please upload your Payment Screenshot now.")
-    bot.register_next_step_handler(msg, handle_screenshot, int(ch_id), int(mins))
+    msg = bot.send_message(call.message.chat.id, "📸 Send Screenshot.")
+    bot.register_next_step_handler(msg, handle_proof, int(ch_id), int(mins))
 
-def handle_screenshot(message, ch_id, mins):
-    if not message.photo: return bot.send_message(message.chat.id, "❌ Error: Please send a photo.")
-    
+def handle_proof(message, ch_id, mins):
+    if not message.photo: return bot.send_message(message.chat.id, "❌ Send photo.")
     markup = InlineKeyboardMarkup().add(
-        InlineKeyboardButton("✅ APPROVE", callback_data=f"adm_app_{message.from_user.id}_{ch_id}_{mins}"),
-        InlineKeyboardButton("❌ REJECT", callback_data=f"adm_rej_{message.from_user.id}")
-    )
-    bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption=f"New Payment Proof\nUser: {message.from_user.id}", reply_markup=markup)
-    bot.send_message(message.chat.id, "🕒 Proof sent! Wait for Admin to verify.")
+        InlineKeyboardButton("✅ APP", callback_data=f"adm_app_{message.from_user.id}_{ch_id}_{mins}"),
+        InlineKeyboardButton("❌ REJ", callback_data=f"adm_rej_{message.from_user.id}"))
+    bot.send_photo(ADMIN_ID, message.photo[-1].file_id, caption=f"Proof from {message.from_user.id}", reply_markup=markup)
+    bot.send_message(message.chat.id, "🕒 Waiting for approval.")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('adm_'))
 def admin_action(call):
-    data = call.data.split('_')
-    u_id = int(data[2])
-    
-    if data[1] == "app":
-        process_approval(u_id, data[3], data[4])
-        bot.edit_message_caption(f"✅ Approved User {u_id}", call.message.chat.id, call.message.message_id)
+    d = call.data.split('_')
+    if d[1] == "app":
+        process_approval(int(d[2]), d[3], d[4])
+        bot.edit_message_caption("✅ Approved", call.message.chat.id, call.message.message_id)
     else:
-        bot.send_message(u_id, "❌ <b>PAYMENT REJECTED!</b>\nYour proof was invalid. Contact Admin.")
-        bot.edit_message_caption(f"❌ Rejected User {u_id}", call.message.chat.id, call.message.message_id)
+        bot.send_message(int(d[2]), "❌ Rejected.")
+        bot.edit_message_caption("❌ Rejected", call.message.chat.id, call.message.message_id)
 
-# --- 7. AUTO KICK (EXPIRE) SCHEDULER ---
-def kick_expired_users():
+def kick_expired():
     now = datetime.now(timezone.utc).timestamp()
-    expired = users_col.find({"expiry": {"$lte": now}})
-    for u in expired:
+    for u in users_col.find({"expiry": {"$lte": now}}):
         try:
             bot.ban_chat_member(u['channel_id'], u['user_id'])
-            bot.unban_chat_member(u['channel_id'], u['user_id']) # Unban so they can rejoin later
+            bot.unban_chat_member(u['channel_id'], u['user_id'])
             users_col.delete_one({"_id": u['_id']})
-            bot.send_message(u['user_id'], "⚠️ <b>Subscription Expired!</b>\nYour access has been removed. Renew to continue.")
         except: pass
 
-# --- 8. RUNTIME ---
 if __name__ == '__main__':
-    # Start Flask
     Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))).start()
-    
-    # Start Scheduler
     scheduler = BackgroundScheduler()
-    scheduler.add_job(kick_expired_users, 'interval', minutes=1)
+    scheduler.add_job(kick_expired, 'interval', minutes=1)
     scheduler.start()
-    
-    print("Bot Started Successfully...")
     bot.infinity_polling()
