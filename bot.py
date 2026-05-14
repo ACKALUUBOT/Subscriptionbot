@@ -133,6 +133,32 @@ def my_plan(message):
     
     bot.send_message(u_id, res, parse_mode="HTML")
 
+# --- ADMIN: REMOVE USER ACCESS ---
+@bot.message_handler(commands=['remove'], func=lambda m: m.from_user.id == ADMIN_ID)
+def remove_user_start(message):
+    msg = bot.send_message(ADMIN_ID, "👤 <b>User ko remove karein:</b>\n\nUs user ki <b>ID</b> bhejein jiska access aap khatam karna chahte hain (ya /cancel):", parse_mode="HTML")
+    bot.register_next_step_handler(msg, process_remove_user)
+
+def process_remove_user(message):
+    if message.text == '/cancel':
+        bot.send_message(ADMIN_ID, "❌ Action cancelled.")
+        return
+    
+    try:
+        u_id = int(message.text)
+        # Database se user ke saare subscriptions delete karein
+        result = users_col.delete_many({"user_id": u_id})
+        
+        if result.deleted_count > 0:
+            bot.send_message(ADMIN_ID, f"✅ <b>Success!</b>\nUser <code>{u_id}</code> ke saare plans database se hata diye gaye hain.", parse_mode="HTML")
+            try:
+                bot.send_message(u_id, "⚠️ <b>Access Revoked:</b> Aapka subscription admin dwara khatam kar diya gaya hai.", parse_mode="HTML")
+            except: pass
+        else:
+            bot.send_message(ADMIN_ID, "❓ Is ID ka koi active subscription nahi mila.")
+    except ValueError:
+        bot.send_message(ADMIN_ID, "❌ Invalid ID! Sirf numbers bhejein.")
+        
 # --- PAYMENT SELECTION ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith('select_'))
 def pay_choice(call):
