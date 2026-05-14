@@ -257,11 +257,21 @@ def check_expiries():
 def home(): return "Healthy"
 
 if __name__ == '__main__':
-    # 409 Conflict Fix
-    bot.delete_webhook(drop_pending_updates=True)
+    # Step 1: Purane updates ko clear karne ke liye drop_pending_updates=True yahan use karein
+    try:
+        print("Cleaning up old connections...")
+        bot.delete_webhook(drop_pending_updates=True)
+    except Exception as e:
+        print(f"Cleanup error: {e}")
     
+    # Step 2: Flask start karein
     Thread(target=lambda: app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))).start()
+    
+    # Step 3: Background Scheduler start karein
     scheduler = BackgroundScheduler()
     scheduler.add_job(check_expiries, 'interval', minutes=1)
     scheduler.start()
-    bot.infinity_polling(skip_pending_updates=True)
+    
+    # Step 4: Bot polling (Yahan se error wala argument hata diya gaya hai)
+    print("Bot is starting fresh...")
+    bot.infinity_polling()
