@@ -18,9 +18,9 @@ UPI_ID = os.getenv('UPI_ID')
 CONTACT_USERNAME = os.getenv('CONTACT_USERNAME')
 
 # Razorpay (Optional)
-RZP_KEY_ID = os.getenv('rzp_test_SpKXC2uwAYNiow')
-RZP_KEY_SECRET = os.getenv('IBPa9Ue4S0tDdh3GgR6uQkhU')
-RZP_WEBHOOK_SECRET = os.getenv('Anubhav@12')
+RZP_KEY_ID = os.getenv('')
+RZP_KEY_SECRET = os.getenv('')
+RZP_WEBHOOK_SECRET = os.getenv('')
 
 bot = telebot.TeleBot(BOT_TOKEN)
 client = MongoClient(MONGO_URI)
